@@ -1,0 +1,28 @@
+name: Scrape price on demand
+
+on:
+  repository_dispatch:
+    types: [scrape-request]
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 playwright
+          playwright install --with-deps chromium
+
+      - name: Scrape and report result
+        env:
+          ITEM_ID: ${{ github.event.client_payload.item_id }}
+          URL: ${{ github.event.client_payload.url }}
+          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
+        run: python scraper/actions_scrape_one.py
