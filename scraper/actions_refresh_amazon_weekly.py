@@ -6,10 +6,15 @@ requests are the ones that cost Apify credits and carry blocking risk.
 Non-Amazon items are still refreshed nightly by actions_refresh_all.py.
 
 Order of attempts per item:
-1. Apify Amazon Actor (handles anti-bot for us, costs Apify credits)
+1. Apify Amazon Actor (handles anti-bot for us, costs Apify credits) --
+   tried exactly once per item, never retried within a run.
 2. Direct Playwright scrape (free, but more likely to hit a CAPTCHA)
 3. If both fail: keep the last known price, flag stale_price = true.
    User can manually hit "Solve CAPTCHA" from the BOM page any time.
+
+Apify usage scales 1:1 with how many Amazon items exist -- N items means
+N Apify calls, no more, no artificial cap. This job being weekly (not
+nightly) is what bounds total credit spend, not a per-run limit.
 """
 
 import os
@@ -41,9 +46,9 @@ def main():
     refreshed = 0
     stale = 0
 
-    for row in rows:
+    for i, row in enumerate(rows):
         item_id, url = row["id"], row["url"]
-        print(f"--- {item_id} ---")
+        print(f"--- {item_id} ({i + 1}/{len(rows)}) ---")
 
         result = try_apify_scrape(url)
         if result.get("found"):
