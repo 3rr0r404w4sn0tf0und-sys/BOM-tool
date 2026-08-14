@@ -38,7 +38,6 @@ def _extract_price(item: dict):
         val = item.get(key)
         if val is None:
             continue
-        # Some Actors nest price as {"value": 19.99, "currency": "USD"}
         if isinstance(val, dict) and "value" in val:
             return val["value"]
         if isinstance(val, (int, float)):
@@ -53,7 +52,7 @@ def _extract_price(item: dict):
     return None
 
 
-def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -> dict:
+def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -> dict:
     if not APIFY_TOKEN or not APIFY_ACTOR_ID:
         return {"found": False, "error": "Apify not configured (missing token/actor id)"}
 
@@ -64,7 +63,12 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -
 
     run_input = {
         "categoryOrProductUrls": [{"url": url}],
-        "locationDeliverableRoutes": ["PRODUCT"],
+        # Empty by default -- this is what triggers the billed "Delivery
+        # Location" event per item. We don't use zip_code yet, so there's
+        # no reason to pay for a location lookup we throw away. Only
+        # applied to the PRODUCT page (not search/offers) once zip_code
+        # is actually passed in.
+        "locationDeliverableRoutes": ["PRODUCT"] if zip_code else [],
         "maxItemsPerStartUrl": 1,
         "maxOffers": 0,
         "maxProductVariantsAsSeparateResults": 0,
@@ -75,8 +79,6 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -
         "scrapeSellers": False,
         "useCaptchaSolver": False,
     }
-    # zip_code/country_code aren't wired end-to-end from the DB yet --
-    # only include them when actually passed in.
     if zip_code:
         run_input["zipCode"] = zip_code
     if country_code:
@@ -86,7 +88,7 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -
         resp = requests.post(
             endpoint,
             json=run_input,
-            timeout=120,  # Apify runs can take a while, this is a real scrape job
+            timeout=120,
         )
         resp.raise_for_status()
         items = resp.json()
@@ -98,7 +100,6 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -
 
     price = _extract_price(items[0])
     if price is None:
-        # Print raw item so the real field name can be read off a live run
         print(f"DEBUG: no known price field found, raw item: {items[0]}")
         return {"found": False, "error": "Apify result had no recognizable price field"}
 
@@ -106,8 +107,6 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = "US") -
 
 
 if __name__ == "__main__":
-    # Quick manual test: APIFY_TOKEN=... APIFY_AMAZON_ACTOR_ID=... \
-    #   python apify_scrape.py "https://www.amazon.com/dp/XXXXXXXXXX"
     import sys
     import json
 
