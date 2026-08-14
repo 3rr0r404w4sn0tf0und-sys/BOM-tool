@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import CaptchaSolver from "./CaptchaSolver.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -152,14 +153,54 @@ export default function App() {
       {bom && (
         <div>
           <h3>{bom.title}</h3>
-          {/* TODO: sections, emoji picker, rich text rows, add/remove rows,
-              tax rate input. This is just proving totals render correctly. */}
+
+          {bom.totals.staleCount > 0 && (
+            <p style={{ color: "#b45309", background: "#fef3c7", padding: 8, borderRadius: 6 }}>
+              ⚠️ {bom.totals.staleCount} Amazon item(s) couldn't be refreshed automatically —
+              showing their last known price. Use "Solve CAPTCHA" below to update them.
+            </p>
+          )}
+
           {bom.totals.excludedCount > 0 && (
             <p style={{ color: "#b45309" }}>
               ⚠️ {bom.totals.excludedCount} item(s) excluded (link failed) — fix links to include in total.
             </p>
           )}
-          <div style={{ fontSize: 19 }}>
+
+          {bom.sections.map((section) => (
+            <div key={section.id} style={{ marginBottom: 20 }}>
+              <h4>{section.emoji} {section.title}</h4>
+              {section.items.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    fontSize: item.font_size || 19,
+                    fontWeight: item.bold ? "bold" : "normal",
+                    fontStyle: item.italic ? "italic" : "normal",
+                    padding: "6px 0",
+                    borderBottom: "1px solid #eee",
+                  }}
+                >
+                  {item.name} — qty {item.qty} —{" "}
+                  {item.status === "ok"
+                    ? `$${Number(item.unit_price).toFixed(2)}`
+                    : "⚠️ Link Failed"}
+                  {item.stale_price && (
+                    <span style={{ color: "#b45309", fontSize: 12 }}> (stale price)</span>
+                  )}
+                  {item.stale_price && (
+                    <div>
+                      <CaptchaSolver item={item} token={token} onResolved={() => loadBom(bom.id)} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {/* TODO: add section/item creation UI, rich text controls, emoji picker,
+              tax rate input, drag-to-reorder. This proves totals + captcha flow render correctly. */}
+          <div style={{ fontSize: 19, marginTop: 20 }}>
             💰 Subtotal: ${bom.totals.subtotal.toFixed(2)}
             <br />
             Tax: ${bom.totals.tax.toFixed(2)}

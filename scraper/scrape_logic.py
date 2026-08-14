@@ -104,7 +104,7 @@ def try_playwright_scrape(url: str) -> dict:
             if response and response.status in (404, 410):
                 return {"found": False, "error": "link_failed: page returned 404/410"}
 
-            page.wait_for_timeout(random.randint(1500, 3000))
+            page.wait_for_timeout(random.randint(2000, 5000) if is_amazon else random.randint(1000, 2000))
 
             if is_amazon:
                 selectors = [

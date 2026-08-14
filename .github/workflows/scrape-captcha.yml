@@ -1,12 +1,13 @@
-name: Scrape price on demand
+name: Scrape with CAPTCHA hand-off
 
 on:
   repository_dispatch:
-    types: [scrape-request]
+    types: [captcha-scrape-request]
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # covers the up-to-10-min wait for a human to solve it
     steps:
       - uses: actions/checkout@v4
 
@@ -19,12 +20,10 @@ jobs:
           pip install requests beautifulsoup4 playwright
           playwright install --with-deps chromium
 
-      - name: Scrape and report result
+      - name: Scrape, wait for CAPTCHA solve if needed
         env:
           ITEM_ID: ${{ github.event.client_payload.item_id }}
           URL: ${{ github.event.client_payload.url }}
-          CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
+          API_BASE_URL: ${{ github.event.client_payload.api_base_url }}
           INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
-        run: python scraper/actions_scrape_one.py
+        run: python scraper/actions_scrape_captcha.py

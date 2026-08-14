@@ -11,6 +11,7 @@ import os
 import sys
 import requests
 from scrape_logic import get_price
+from apify_scrape import try_apify_scrape
 
 
 def main():
@@ -20,7 +21,17 @@ def main():
     secret = os.environ["INTERNAL_SCRAPE_SECRET"]
 
     try:
-        result = get_price(url)
+        if "amazon." in url:
+            # Amazon: try Apify first (costs credits but handles anti-bot),
+            # fall back to direct Playwright (free, may hit a CAPTCHA --
+            # that's fine here, it just reports price_not_found and the
+            # user can use "Solve CAPTCHA" from the BOM page afterward).
+            result = try_apify_scrape(url)
+            if not result.get("found"):
+                print(f"Apify failed ({result.get('error')}), trying Playwright directly")
+                result = get_price(url)
+        else:
+            result = get_price(url)
     except Exception as e:
         result = {"found": False, "error": f"Unhandled scrape error: {e}"}
 

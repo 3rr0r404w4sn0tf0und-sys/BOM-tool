@@ -162,6 +162,75 @@ bomsRouter.delete("/items/:itemId", async (req, res) => {
   res.status(204).send();
 });
 
+// POST /api/boms/items/:itemId/request-captcha-refresh
+// User clicks "Solve CAPTCHA" on a stale Amazon item. Fires the special
+// CAPTCHA-aware workflow instead of the normal scrape-on-demand one.
+bomsRouter.post("/items/:itemId/request-captcha-refresh", async (req, res) => {
+  const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
+    req.params.itemId,
+  ]);
+  const item = itemResult.rows[0];
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  if (!item.url) return res.status(400).json({ error: "Item has no URL" });
+
+  await pool.query(
+    "UPDATE items SET captcha_status = 'awaiting_screenshot' WHERE id = $1",
+    [item.id]
+  );
+
+  const ghRepo = process.env.GITHUB_REPO;
+  const ghToken = process.env.GITHUB_DISPATCH_TOKEN;
+  try {
+    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event_type: "captcha-scrape-request",
+        client_payload: {
+          item_id: item.id,
+          url: item.url,
+          api_base_url: process.env.API_PUBLIC_URL,
+        },
+      }),
+    });
+  } catch (e) {
+    console.error("Failed to trigger CAPTCHA workflow:", e);
+    return res.status(500).json({ error: "Failed to start CAPTCHA-solve job" });
+  }
+
+  res.json({ status: "started", message: "Screenshot will appear in ~20-40s" });
+});
+
+// GET /api/boms/items/:itemId/captcha
+// Frontend polls this while waiting for the screenshot to show up.
+bomsRouter.get("/items/:itemId/captcha", async (req, res) => {
+  const result = await pool.query(
+    "SELECT id, captcha_status, captcha_screenshot FROM items WHERE id = $1",
+    [req.params.itemId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
+  res.json(result.rows[0]);
+});
+
+// POST /api/boms/items/:itemId/captcha-solution
+// User types the CAPTCHA text and submits it here.
+bomsRouter.post("/items/:itemId/captcha-solution", async (req, res) => {
+  const { solution } = req.body;
+  if (!solution) return res.status(400).json({ error: "solution required" });
+
+  const result = await pool.query(
+    `UPDATE items SET captcha_solution = $1, captcha_status = 'solution_submitted'
+     WHERE id = $2 RETURNING id`,
+    [solution, req.params.itemId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
+  res.json({ ok: true });
+});
+
 // Manually re-trigger a scrape for one item (e.g. user clicks "refresh price")
 bomsRouter.post("/items/:itemId/refresh", async (req, res) => {
   const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
