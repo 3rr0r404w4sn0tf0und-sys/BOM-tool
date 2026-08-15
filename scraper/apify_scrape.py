@@ -38,6 +38,7 @@ def _extract_price(item: dict):
         val = item.get(key)
         if val is None:
             continue
+        # Some Actors nest price as {"value": 19.99, "currency": "USD"}
         if isinstance(val, dict) and "value" in val:
             return val["value"]
         if isinstance(val, (int, float)):
@@ -79,6 +80,9 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
         "scrapeSellers": False,
         "useCaptchaSolver": False,
     }
+    # zip_code/country_code aren't wired end-to-end from the DB yet --
+    # only include them (and only pay for the Delivery Location lookup
+    # above) when actually passed in.
     if zip_code:
         run_input["zipCode"] = zip_code
     if country_code:
@@ -88,7 +92,7 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
         resp = requests.post(
             endpoint,
             json=run_input,
-            timeout=120,
+            timeout=120,  # Apify runs can take a while, this is a real scrape job
         )
         resp.raise_for_status()
         items = resp.json()
@@ -100,6 +104,7 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
 
     price = _extract_price(items[0])
     if price is None:
+        # Print raw item so the real field name can be read off a live run
         print(f"DEBUG: no known price field found, raw item: {items[0]}")
         return {"found": False, "error": "Apify result had no recognizable price field"}
 
@@ -107,6 +112,8 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
 
 
 if __name__ == "__main__":
+    # Quick manual test: APIFY_TOKEN=... APIFY_AMAZON_ACTOR_ID=... \
+    #   python apify_scrape.py "https://www.amazon.com/dp/XXXXXXXXXX"
     import sys
     import json
 

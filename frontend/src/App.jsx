@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import CaptchaSolver from "./CaptchaSolver.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
@@ -10,25 +11,74 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export default function App() {
   const [token, setToken] = useState(null);
+  const [user, setUser] = useState(null);
   const [bom, setBom] = useState(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [mode, setMode] = useState("login"); // "login" | "register"
   const [authError, setAuthError] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState(null); // null | "checking" | "success" | "error"
+  const [verifyMessage, setVerifyMessage] = useState(null);
+  const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
+
+  // On load, check for ?verify_token= in the URL (the link from the
+  // verification email points back here) and complete verification.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const verifyToken = params.get("verify_token");
+    if (!verifyToken) return;
+
+    setVerifyStatus("checking");
+    fetch(`${API_URL}/api/auth/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: verifyToken }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.verified) {
+          setVerifyStatus("success");
+          setVerifyMessage("Email verified! You can log in now.");
+          setUser((u) => (u ? { ...u, email_verified: true } : u));
+        } else {
+          setVerifyStatus("error");
+          setVerifyMessage(data.error || "Verification failed.");
+        }
+        // Clean the token out of the URL so refreshing doesn't re-submit it.
+        window.history.replaceState({}, "", window.location.pathname);
+      })
+      .catch(() => {
+        setVerifyStatus("error");
+        setVerifyMessage("Could not reach the server to verify. Try again.");
+      });
+  }, []);
+
+  function clientValidate() {
+    if (!EMAIL_RE.test(email.trim())) return "Enter a valid email address";
+    if (password.length < 8) return "Password must be at least 8 characters";
+    if (mode === "register" && password !== confirmPassword) return "Passwords don't match";
+    return null;
+  }
 
   async function login() {
+    const validationError = clientValidate();
+    if (validationError) return setAuthError(validationError);
+
     setAuthError(null);
     setAuthLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
-      if (data.token) setToken(data.token);
-      else setAuthError(data.error || "Login failed");
+      if (data.token) {
+        setToken(data.token);
+        setUser(data.user);
+      } else setAuthError(data.error || "Login failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
     } finally {
@@ -37,21 +87,40 @@ export default function App() {
   }
 
   async function register() {
+    const validationError = clientValidate();
+    if (validationError) return setAuthError(validationError);
+
     setAuthError(null);
     setAuthLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
-      if (data.token) setToken(data.token);
-      else setAuthError(data.error || "Registration failed");
+      if (data.token) {
+        setToken(data.token);
+        setUser(data.user);
+      } else setAuthError(data.error || "Registration failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
     } finally {
       setAuthLoading(false);
+    }
+  }
+
+  async function resendVerification() {
+    setResendStatus("sending");
+    try {
+      const res = await fetch(`${API_URL}/api/auth/resend-verification`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setResendStatus(data.sent ? "sent" : "error");
+    } catch {
+      setResendStatus("error");
     }
   }
 
@@ -79,6 +148,21 @@ export default function App() {
     return (
       <div style={{ fontFamily: "sans-serif", padding: 40, maxWidth: 320 }}>
         <h2>BOM Tool</h2>
+
+        {verifyStatus && (
+          <p
+            style={{
+              padding: 8,
+              borderRadius: 6,
+              fontSize: 13,
+              marginBottom: 16,
+              background: verifyStatus === "success" ? "#dcfce7" : verifyStatus === "error" ? "#fee2e2" : "#f1f5f9",
+              color: verifyStatus === "success" ? "#166534" : verifyStatus === "error" ? "#b91c1c" : "#475569",
+            }}
+          >
+            {verifyStatus === "checking" ? "Verifying your email…" : verifyMessage}
+          </p>
+        )}
 
         <div style={{ display: "flex", marginBottom: 16, borderBottom: "1px solid #ddd" }}>
           <button
@@ -112,16 +196,25 @@ export default function App() {
           style={{ width: "100%", padding: 8, marginBottom: 8, boxSizing: "border-box" }}
         />
         <input
-          placeholder="password"
+          placeholder="password (min 8 characters)"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           style={{ width: "100%", padding: 8, marginBottom: 8, boxSizing: "border-box" }}
         />
+        {mode === "register" && (
+          <input
+            placeholder="confirm password"
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            style={{ width: "100%", padding: 8, marginBottom: 8, boxSizing: "border-box" }}
+          />
+        )}
 
         <button
           onClick={mode === "login" ? login : register}
-          disabled={authLoading || !email || !password}
+          disabled={authLoading || !email || !password || (mode === "register" && !confirmPassword)}
           style={{ width: "100%", padding: 10, cursor: "pointer" }}
         >
           {authLoading ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
@@ -144,10 +237,26 @@ export default function App() {
     <div style={{ fontFamily: "sans-serif", padding: 40 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>BOM Tool</h2>
-        <button onClick={() => { setToken(null); setBom(null); setEmail(""); setPassword(""); }}>
+        <button onClick={() => { setToken(null); setUser(null); setBom(null); setEmail(""); setPassword(""); setConfirmPassword(""); }}>
           Log out
         </button>
       </div>
+
+      {user && !user.email_verified && (
+        <div style={{ background: "#fef3c7", color: "#92400e", padding: 10, borderRadius: 6, marginBottom: 16, fontSize: 14 }}>
+          📧 Please verify your email ({user.email}) — check your inbox for a link.
+          {" "}
+          <button
+            onClick={resendVerification}
+            disabled={resendStatus === "sending"}
+            style={{ marginLeft: 4, cursor: "pointer", border: "none", background: "none", color: "#92400e", textDecoration: "underline" }}
+          >
+            {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent!" : "Resend email"}
+          </button>
+          {resendStatus === "error" && <span style={{ marginLeft: 6 }}>Failed to send — try again shortly.</span>}
+        </div>
+      )}
+
       {!bom && <button onClick={createBom}>Create a BOM</button>}
 
       {bom && (
