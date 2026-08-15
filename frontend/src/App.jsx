@@ -244,14 +244,15 @@ export default function App() {
 
       {user && !user.email_verified && (
         <div style={{ background: "#fef3c7", color: "#92400e", padding: 10, borderRadius: 6, marginBottom: 16, fontSize: 14 }}>
-          📧 Please verify your email ({user.email}) — check your inbox for a link.
+          📧 Please verify your email ({user.email}) — check your inbox
+          <strong> and spam/junk folder</strong> for the link (first emails from a new sender often land there).
           {" "}
           <button
             onClick={resendVerification}
             disabled={resendStatus === "sending"}
             style={{ marginLeft: 4, cursor: "pointer", border: "none", background: "none", color: "#92400e", textDecoration: "underline" }}
           >
-            {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent!" : "Resend email"}
+            {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent! Check spam too." : "Resend email"}
           </button>
           {resendStatus === "error" && <span style={{ marginLeft: 6 }}>Failed to send — try again shortly.</span>}
         </div>
