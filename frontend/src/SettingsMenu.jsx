@@ -31,6 +31,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          transition: "background-color 500ms ease, border-color 500ms ease, color 500ms ease",
         }}
       >
         <span
@@ -61,7 +62,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
           opacity: open ? 1 : 0,
           transform: open ? "scale(1) translateY(0)" : "scale(0.95) translateY(-6px)",
           pointerEvents: open ? "auto" : "none",
-          transition: "opacity 200ms ease, transform 200ms ease",
+          transition: "opacity 200ms ease, transform 200ms ease, background-color 500ms ease, border-color 500ms ease",
         }}
       >
         <div
@@ -75,7 +76,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
             gap: 10,
           }}
         >
-          <span style={{ fontSize: 14, color: theme.text }}>
+          <span style={{ fontSize: 14, color: theme.text, transition: "color 500ms ease" }}>
             {themeName === "dark" ? "Dark mode" : "Light mode"}
           </span>
           <ThemeToggle isDark={themeName === "dark"} onToggle={onToggleTheme} />
@@ -83,7 +84,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
 
         {isLoggedIn && (
           <>
-            <div style={{ height: 1, background: theme.border, margin: "6px 0" }} />
+            <div style={{ height: 1, background: theme.border, margin: "6px 0", transition: "background-color 500ms ease" }} />
             <button
               onClick={() => {
                 setOpen(false);
@@ -102,6 +103,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
+                transition: "color 500ms ease",
               }}
             >
               <IconLogout size={15} color={theme.errText} />
