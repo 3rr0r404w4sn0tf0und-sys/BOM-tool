@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { IconUnlock } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -76,8 +77,8 @@ export default function CaptchaSolver({ item, token, onResolved }) {
 
   if (phase === "idle") {
     return (
-      <button onClick={start} style={{ fontSize: 12 }}>
-        🔓 Solve CAPTCHA
+      <button onClick={start} style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <IconUnlock size={13} /> Solve CAPTCHA
       </button>
     );
   }

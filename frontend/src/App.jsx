@@ -3,6 +3,7 @@ import CaptchaSolver from "./CaptchaSolver.jsx";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
+import { IconWarning, IconEnvelope, IconCoin } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -260,7 +261,9 @@ export default function App() {
               boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
             }}
           >
-            <div style={{ fontSize: 34, marginBottom: 10 }}>📬</div>
+            <div style={{ fontSize: 34, marginBottom: 10, display: "flex", justifyContent: "center" }}>
+              <IconEnvelope size={34} color={theme.text} />
+            </div>
             <h2 style={{ margin: "0 0 10px" }}>Verification email sent</h2>
             <p style={{ color: theme.subtleText, fontSize: 14, lineHeight: 1.6, margin: "0 0 6px" }}>
               We sent a verification link to <strong>{justRegisteredEmail}</strong>.
@@ -439,18 +442,21 @@ export default function App() {
         </div>
 
         {user && !user.email_verified && (
-          <div style={{ background: theme.warnBg, color: theme.warnText, padding: 10, borderRadius: 6, marginBottom: 16, fontSize: 14 }}>
-            📧 Please verify your email ({user.email}) — check your inbox
-            <strong> and spam/junk folder</strong> for the link (first emails from a new sender often land there).
-            {" "}
-            <button
-              onClick={resendVerification}
-              disabled={resendStatus === "sending"}
-              style={{ marginLeft: 4, cursor: "pointer", border: "none", background: "none", color: theme.warnText, textDecoration: "underline" }}
-            >
-              {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent! Check spam too." : "Resend email"}
-            </button>
-            {resendStatus === "error" && <span style={{ marginLeft: 6 }}>Failed to send — try again shortly.</span>}
+          <div style={{ background: theme.warnBg, color: theme.warnText, padding: 10, borderRadius: 6, marginBottom: 16, fontSize: 14, display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <span style={{ flexShrink: 0, marginTop: 2 }}><IconEnvelope size={15} color={theme.warnText} /></span>
+            <span>
+              Please verify your email ({user.email}) — check your inbox
+              <strong> and spam/junk folder</strong> for the link (first emails from a new sender often land there).
+              {" "}
+              <button
+                onClick={resendVerification}
+                disabled={resendStatus === "sending"}
+                style={{ marginLeft: 4, cursor: "pointer", border: "none", background: "none", color: theme.warnText, textDecoration: "underline" }}
+              >
+                {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent! Check spam too." : "Resend email"}
+              </button>
+              {resendStatus === "error" && <span style={{ marginLeft: 6 }}>Failed to send — try again shortly.</span>}
+            </span>
           </div>
         )}
 
@@ -461,15 +467,19 @@ export default function App() {
             <h3>{bom.title}</h3>
 
             {bom.totals.staleCount > 0 && (
-              <p style={{ color: theme.warnText, background: theme.warnBg, padding: 8, borderRadius: 6 }}>
-                ⚠️ {bom.totals.staleCount} Amazon item(s) couldn't be refreshed automatically —
-                showing their last known price. Use "Solve CAPTCHA" below to update them.
+              <p style={{ color: theme.warnText, background: theme.warnBg, padding: 8, borderRadius: 6, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.warnText} /></span>
+                <span>
+                  {bom.totals.staleCount} Amazon item(s) couldn't be refreshed automatically —
+                  showing their last known price. Use "Solve CAPTCHA" below to update them.
+                </span>
               </p>
             )}
 
             {bom.totals.excludedCount > 0 && (
-              <p style={{ color: theme.warnText }}>
-                ⚠️ {bom.totals.excludedCount} item(s) excluded (link failed) — fix links to include in total.
+              <p style={{ color: theme.warnText, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.warnText} /></span>
+                <span>{bom.totals.excludedCount} item(s) excluded (link failed) — fix links to include in total.</span>
               </p>
             )}
 
@@ -490,9 +500,15 @@ export default function App() {
                     {item.name} — qty {item.qty} —{" "}
                     {item.status === "ok"
                       ? `$${Number(item.unit_price).toFixed(2)}`
-                      : "⚠️ Link Failed"}
+                      : (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <IconWarning size={13} color={theme.warnText} /> Link Failed
+                        </span>
+                      )}
                     {item.stale_price && (
-                      <span style={{ color: theme.warnText, fontSize: 12 }}> (stale price)</span>
+                      <span style={{ color: theme.warnText, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                        <IconWarning size={12} color={theme.warnText} /> (stale price)
+                      </span>
                     )}
                     {item.stale_price && (
                       <div>
@@ -506,11 +522,11 @@ export default function App() {
 
             {/* TODO: add section/item creation UI, rich text controls, emoji picker,
                 tax rate input, drag-to-reorder. This proves totals + captcha flow render correctly. */}
-            <div style={{ fontSize: 19, marginTop: 20 }}>
-              💰 Subtotal: ${bom.totals.subtotal.toFixed(2)}
-              <br />
-              Tax: ${bom.totals.tax.toFixed(2)}
-              <br />
+            <div style={{ fontSize: 19, marginTop: 20, display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <IconCoin size={17} color={theme.text} /> Subtotal: ${bom.totals.subtotal.toFixed(2)}
+              </span>
+              <span>Tax: ${bom.totals.tax.toFixed(2)}</span>
               <strong>Total: ${bom.totals.total.toFixed(2)}</strong>
             </div>
           </div>

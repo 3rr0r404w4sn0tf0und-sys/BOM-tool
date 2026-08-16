@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ThemeToggle from "./ThemeToggle.jsx";
+import { IconGear, IconLogout } from "./Icons.jsx";
 
 export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -32,7 +33,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
           justifyContent: "center",
         }}
       >
-        ⚙️
+        <IconGear size={17} color={theme.text} />
       </button>
 
       {open && (
@@ -41,7 +42,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
             position: "absolute",
             top: 44,
             right: 0,
-            minWidth: 200,
+            minWidth: 220,
             background: theme.cardBg,
             border: `1px solid ${theme.border}`,
             borderRadius: 10,
@@ -84,9 +85,13 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                   fontSize: 14,
                   color: theme.errText,
                   borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
                 }}
               >
-                🚪 Log out
+                <IconLogout size={15} color={theme.errText} />
+                Log out
               </button>
             </>
           )}
