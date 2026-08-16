@@ -15,7 +15,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
   }, []);
 
   return (
-    <div ref={ref} style={{ position: "relative", fontFamily: "sans-serif" }}>
+    <div ref={ref} style={{ position: "relative", fontFamily: "sans-serif", marginLeft: 10 }}>
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label="Settings"
@@ -31,11 +31,17 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          transform: open ? "rotate(35deg)" : "rotate(0deg)",
-          transition: "transform 300ms ease",
         }}
       >
-        <IconGear size={18} color={theme.text} />
+        <span
+          style={{
+            display: "flex",
+            transform: open ? "rotate(35deg)" : "rotate(0deg)",
+            transition: "transform 300ms ease",
+          }}
+        >
+          <IconGear size={18} color={theme.text} />
+        </span>
       </button>
 
       <div
@@ -44,6 +50,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
           top: 44,
           right: 0,
           minWidth: 224,
+          boxSizing: "border-box",
           background: theme.cardBg,
           border: `1px solid ${theme.border}`,
           borderRadius: 10,
@@ -60,6 +67,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
         <div
           style={{
             width: "100%",
+            boxSizing: "border-box",
             padding: "8px 2px 8px 10px",
             display: "flex",
             alignItems: "center",
