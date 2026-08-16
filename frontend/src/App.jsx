@@ -7,6 +7,8 @@ import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
+const VERIFY_PENDING_SECONDS = 15;
 
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
@@ -29,6 +31,8 @@ export default function App() {
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [justRegisteredEmail, setJustRegisteredEmail] = useState(null);
+  const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
   const theme = getTheme(themeName);
 
   function toggleTheme() {
@@ -38,6 +42,45 @@ export default function App() {
       return next;
     });
   }
+
+  // Keep the actual page background (outside our themed containers) in sync,
+  // so there's no white/mismatched edge around the app on load or overscroll.
+  useEffect(() => {
+    document.body.style.background = theme.bg;
+    document.documentElement.style.background = theme.bg;
+  }, [theme.bg]);
+
+  // Show the privacy notice once, automatically, on a person's first visit.
+  // It stays reachable afterward via the footer link regardless.
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem(PRIVACY_SEEN_KEY)) {
+        setShowPrivacy(true);
+        window.localStorage.setItem(PRIVACY_SEEN_KEY, "1");
+      }
+    } catch {
+      // localStorage unavailable — just skip the auto-popup, footer link still works
+    }
+  }, []);
+
+  // Countdown + auto-close for the "verification email sent" interstitial
+  // shown right after registering (Brevo sends a link, not a code, so there's
+  // nothing to type here — the tab is safe to close).
+  useEffect(() => {
+    if (!justRegisteredEmail) return;
+    setVerifyCountdown(VERIFY_PENDING_SECONDS);
+    const interval = setInterval(() => {
+      setVerifyCountdown((s) => {
+        if (s <= 1) {
+          clearInterval(interval);
+          window.close();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [justRegisteredEmail]);
 
   function logout() {
     setToken(null);
@@ -150,6 +193,7 @@ export default function App() {
       if (data.token) {
         setToken(data.token);
         setUser(data.user);
+        setJustRegisteredEmail(email.trim());
       } else setAuthError(data.error || "Registration failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
@@ -199,6 +243,50 @@ export default function App() {
     background: theme.bg,
     fontFamily: "sans-serif",
   };
+
+  if (justRegisteredEmail) {
+    return (
+      <div style={pageShell}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
+          <div
+            style={{
+              width: 360,
+              maxWidth: "100%",
+              background: theme.cardBg,
+              color: theme.text,
+              borderRadius: 12,
+              padding: 32,
+              textAlign: "center",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            }}
+          >
+            <div style={{ fontSize: 34, marginBottom: 10 }}>📬</div>
+            <h2 style={{ margin: "0 0 10px" }}>Verification email sent</h2>
+            <p style={{ color: theme.subtleText, fontSize: 14, lineHeight: 1.6, margin: "0 0 6px" }}>
+              We sent a verification link to <strong>{justRegisteredEmail}</strong>.
+            </p>
+            <p style={{ color: theme.subtleText, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
+              Check your inbox <strong>and your spam/junk folder</strong> — click the link there to verify.
+            </p>
+            <p style={{ color: theme.muted, fontSize: 13 }}>
+              This tab will close automatically in {verifyCountdown}s.
+            </p>
+            <button
+              onClick={() => window.close()}
+              style={{
+                marginTop: 14, padding: "8px 16px", cursor: "pointer",
+                border: `1px solid ${theme.border}`, borderRadius: 8, background: theme.cardBg, color: theme.text, fontSize: 13,
+              }}
+            >
+              Close now
+            </button>
+          </div>
+        </div>
+        <Footer theme={theme} onPrivacyClick={() => setShowPrivacy(true)} />
+        {showPrivacy && <PrivacyModal theme={theme} onClose={() => setShowPrivacy(false)} />}
+      </div>
+    );
+  }
 
   if (!token) {
     return (

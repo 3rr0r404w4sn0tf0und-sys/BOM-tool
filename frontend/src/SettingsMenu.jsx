@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import ThemeToggle from "./ThemeToggle.jsx";
 
 export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout }) {
   const [open, setOpen] = useState(false);
@@ -49,28 +50,21 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
             zIndex: 100,
           }}
         >
-          <button
-            onClick={() => {
-              onToggleTheme();
-            }}
+          <div
             style={{
               width: "100%",
-              textAlign: "left",
               padding: "8px 10px",
-              border: "none",
-              background: "none",
-              cursor: "pointer",
-              fontSize: 14,
-              color: theme.text,
-              borderRadius: 6,
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              justifyContent: "space-between",
+              gap: 10,
             }}
           >
-            {themeName === "dark" ? "☀️" : "🌙"}
-            {themeName === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          </button>
+            <span style={{ fontSize: 14, color: theme.text }}>
+              {themeName === "dark" ? "Dark mode" : "Light mode"}
+            </span>
+            <ThemeToggle isDark={themeName === "dark"} onToggle={onToggleTheme} />
+          </div>
 
           {isLoggedIn && (
             <>
