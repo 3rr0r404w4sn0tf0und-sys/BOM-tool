@@ -10,6 +10,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
 const VERIFY_PENDING_SECONDS = 15;
+const TOKEN_STORAGE_KEY = "bom-tool-token";
 
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
@@ -34,7 +35,23 @@ export default function App() {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [justRegisteredEmail, setJustRegisteredEmail] = useState(null);
   const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
+  const [authChecking, setAuthChecking] = useState(true);
   const theme = getTheme(themeName);
+
+  function persistToken(t) {
+    try {
+      if (t) window.localStorage.setItem(TOKEN_STORAGE_KEY, t);
+      else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch {
+      // localStorage unavailable — session just won't survive a refresh
+    }
+  }
+
+  function setSession(t, u) {
+    setToken(t);
+    setUser(u);
+    persistToken(t);
+  }
 
   function toggleTheme() {
     setThemeName((prev) => {
@@ -90,7 +107,51 @@ export default function App() {
     setEmail("");
     setPassword("");
     setConfirmPassword("");
+    persistToken(null);
   }
+
+  // On load, try to restore a session from a previously-saved token before
+  // rendering the login screen, so a refresh doesn't sign people out.
+  useEffect(() => {
+    let cancelled = false;
+    let stored = null;
+    try {
+      stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    } catch {
+      // localStorage unavailable
+    }
+    if (!stored) {
+      setAuthChecking(false);
+      return;
+    }
+    setToken(stored);
+    fetch(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${stored}` } })
+      .then((r) => {
+        if (!r.ok) throw new Error("invalid session");
+        return r.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        if (data.user) {
+          setUser(data.user);
+        } else {
+          setToken(null);
+          persistToken(null);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Stored token is stale/invalid — clear it and fall back to login.
+        setToken(null);
+        persistToken(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // On load, check for ?verify_token= (link from verification email) or
   // ?oauth_token=/?oauth_error= (redirect back from Google/GitHub) in the URL.
@@ -101,7 +162,7 @@ export default function App() {
     const oauthError = params.get("oauth_error");
 
     if (oauthToken) {
-      setToken(oauthToken);
+      setSession(oauthToken, null);
       fetch(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${oauthToken}` } })
         .then((r) => r.json())
         .then((data) => {
@@ -168,8 +229,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.token) {
-        setToken(data.token);
-        setUser(data.user);
+        setSession(data.token, data.user);
       } else setAuthError(data.error || "Login failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
@@ -192,8 +252,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.token) {
-        setToken(data.token);
-        setUser(data.user);
+        setSession(data.token, data.user);
         setJustRegisteredEmail(email.trim());
       } else setAuthError(data.error || "Registration failed");
     } catch (e) {
@@ -244,6 +303,14 @@ export default function App() {
     background: theme.bg,
     fontFamily: "sans-serif",
   };
+
+  if (authChecking) {
+    return (
+      <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: theme.muted, fontSize: 14 }}>Loading…</div>
+      </div>
+    );
+  }
 
   if (justRegisteredEmail) {
     return (
