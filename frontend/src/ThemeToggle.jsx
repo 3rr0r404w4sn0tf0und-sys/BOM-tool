@@ -3,9 +3,9 @@ import React from "react";
 // An animated day->night switch. The track background gradient crossfades
 // and the knob (sun/moon) slides across, based on isDark.
 export default function ThemeToggle({ isDark, onToggle }) {
-  const trackWidth = 64;
-  const trackHeight = 32;
-  const knobSize = 26;
+  const trackWidth = 52;
+  const trackHeight = 26;
+  const knobSize = 20;
   const knobTravel = trackWidth - knobSize - 6; // padding on each side = 3
 
   return (
@@ -40,10 +40,10 @@ export default function ThemeToggle({ isDark, onToggle }) {
           pointerEvents: "none",
         }}
       >
-        <Dot top={7} left={10} size={2} />
-        <Dot top={16} left={18} size={1.5} />
-        <Dot top={9} left={30} size={1.5} />
-        <Dot top={20} left={38} size={2} />
+        <Dot top={6} left={8} size={1.6} />
+        <Dot top={13} left={15} size={1.2} />
+        <Dot top={7} left={24} size={1.2} />
+        <Dot top={16} left={31} size={1.6} />
       </span>
 
       {/* clouds, fade in on light */}
@@ -59,22 +59,22 @@ export default function ThemeToggle({ isDark, onToggle }) {
         <span
           style={{
             position: "absolute",
-            top: 20,
-            left: 8,
-            width: 14,
-            height: 5,
-            borderRadius: 5,
+            top: 16,
+            left: 7,
+            width: 11,
+            height: 4,
+            borderRadius: 4,
             background: "rgba(255,255,255,0.6)",
           }}
         />
         <span
           style={{
             position: "absolute",
-            top: 8,
-            left: 34,
-            width: 10,
-            height: 4,
-            borderRadius: 4,
+            top: 6,
+            left: 28,
+            width: 8,
+            height: 3,
+            borderRadius: 3,
             background: "rgba(255,255,255,0.5)",
           }}
         />
@@ -106,8 +106,8 @@ export default function ThemeToggle({ isDark, onToggle }) {
         {isDark ? (
           // moon craters
           <span style={{ position: "relative", width: "100%", height: "100%" }}>
-            <span style={{ position: "absolute", top: 5, left: 6, width: 4, height: 4, borderRadius: "50%", background: "rgba(100,116,139,0.5)" }} />
-            <span style={{ position: "absolute", top: 12, left: 14, width: 3, height: 3, borderRadius: "50%", background: "rgba(100,116,139,0.5)" }} />
+            <span style={{ position: "absolute", top: 4, left: 5, width: 3, height: 3, borderRadius: "50%", background: "rgba(100,116,139,0.5)" }} />
+            <span style={{ position: "absolute", top: 10, left: 11, width: 2, height: 2, borderRadius: "50%", background: "rgba(100,116,139,0.5)" }} />
           </span>
         ) : null}
       </span>
