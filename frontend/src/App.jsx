@@ -4,7 +4,8 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil } from "./Icons.jsx";
+import ApiModal from "./ApiModal.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -42,6 +43,7 @@ export default function App() {
   const [bomListLoading, setBomListLoading] = useState(false);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [showApiModal, setShowApiModal] = useState(false);
   const theme = getTheme(themeName);
 
   function persistToken(t) {
@@ -728,17 +730,32 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                onClick={addTable}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0,
-                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                }}
-              >
-                <IconPlus size={13} /> Add table
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <button
+                  onClick={() => setShowApiModal(true)}
+                  title="API access"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlug size={13} /> API
+                </button>
+                <button
+                  onClick={addTable}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlus size={13} /> Add table
+                </button>
+              </div>
             </div>
+
+            {showApiModal && <ApiModal bom={bom} theme={theme} onClose={() => setShowApiModal(false)} />}
 
             {bom.totals.staleCount > 0 && (
               <p style={{ color: theme.warnText, background: theme.warnBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>

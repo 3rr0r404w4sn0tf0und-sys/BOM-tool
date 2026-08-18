@@ -4,10 +4,13 @@ import { calculateTotals } from "../db/totals.js";
 
 export const publicRouter = express.Router();
 
-// Auth via API key in header: X-API-Key: <public_api_key>
+// Auth via API key. Prefer the X-API-Key header, but also accept
+// ?api_key=... in the query string -- tools like Google Sheets'
+// IMPORTDATA/IMPORTJSON and Odoo's simpler HTTP nodes can't always set
+// custom headers, so a URL-embedded key keeps this usable from those.
 async function getBomByApiKey(req, res, next) {
-  const apiKey = req.header("X-API-Key");
-  if (!apiKey) return res.status(401).json({ error: "Missing X-API-Key header" });
+  const apiKey = req.header("X-API-Key") || req.query.api_key;
+  if (!apiKey) return res.status(401).json({ error: "Missing API key (X-API-Key header or ?api_key=)" });
 
   const bomResult = await pool.query("SELECT * FROM boms WHERE public_api_key = $1", [
     apiKey,
