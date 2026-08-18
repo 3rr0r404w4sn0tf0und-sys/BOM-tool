@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import CaptchaSolver from "./CaptchaSolver.jsx";
 import ContextMenu from "./ContextMenu.jsx";
-import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil } from "./Icons.jsx";
+import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -73,33 +73,102 @@ function EditableCell({ value, placeholder, onCommit, theme, align, mono }) {
   );
 }
 
+// Manual "refresh price" control. Fires POST /items/:id/refresh (which
+// works for Amazon too -- it tries Apify then falls back to Playwright,
+// same as the scheduled jobs) then polls the parent's onRefresh a few
+// times since the result comes back async via a GitHub Actions callback.
+function RefreshButton({ item, theme, token, onRefresh, spin }) {
+  const [firing, setFiring] = useState(false);
+  const pollRef = useRef(null);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  async function fire() {
+    if (firing || item.status === "pending") return;
+    setFiring(true);
+    try {
+      await fetch(`${API_URL}/api/boms/items/${item.id}/refresh`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // ignore -- polling below will just find nothing changed
+    }
+    onRefresh();
+    let checks = 0;
+    pollRef.current = setInterval(() => {
+      checks += 1;
+      onRefresh();
+      if (checks >= 8) {
+        clearInterval(pollRef.current);
+        setFiring(false);
+      }
+    }, 4000);
+  }
+
+  const busy = firing || item.status === "pending" || spin;
+
+  return (
+    <button
+      onClick={fire}
+      disabled={busy}
+      title="Refresh price now"
+      style={{
+        border: "none", background: "none", cursor: busy ? "default" : "pointer",
+        padding: 2, display: "flex", color: theme.muted, opacity: busy ? 0.5 : 0.7,
+      }}
+      onMouseEnter={(e) => !busy && (e.currentTarget.style.opacity = 1)}
+      onMouseLeave={(e) => !busy && (e.currentTarget.style.opacity = 0.7)}
+    >
+      <span
+        style={{
+          display: "flex",
+          animation: busy ? "bomToolSpin 900ms linear infinite" : "none",
+        }}
+      >
+        <style>{`@keyframes bomToolSpin { to { transform: rotate(360deg); } }`}</style>
+        <IconRefresh size={12} color={theme.muted} />
+      </span>
+    </button>
+  );
+}
+
 function CostCell({ item, theme, token, onResolved }) {
   if (item.status === "ok") {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-        <span style={{ fontSize: 13.5, color: theme.text, fontWeight: 600 }}>
-          ${Number(item.unit_price).toFixed(2)}
-        </span>
-        {item.stale_price && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: theme.warnText }}>
-            <IconWarning size={11} color={theme.warnText} /> stale
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+          <span style={{ fontSize: 13.5, color: theme.text, fontWeight: 600 }}>
+            ${Number(item.unit_price).toFixed(2)}
           </span>
-        )}
-        {item.stale_price && <CaptchaSolver item={item} token={token} onResolved={onResolved} />}
+          {item.stale_price && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: theme.warnText }}>
+              <IconWarning size={11} color={theme.warnText} /> stale
+            </span>
+          )}
+          {item.stale_price && <CaptchaSolver item={item} token={token} onResolved={onResolved} />}
+        </div>
+        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
       </div>
     );
   }
   if (item.status === "pending" || !item.status) {
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.muted }}>
-        <IconClock size={12} color={theme.muted} /> pending…
-      </span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.muted }}>
+          <IconClock size={12} color={theme.muted} /> pending…
+        </span>
+        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} spin />
+      </div>
     );
   }
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.errText }}>
-      <IconWarning size={12} color={theme.errText} /> failed
-    </span>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.errText }}>
+        <IconWarning size={12} color={theme.errText} /> failed
+      </span>
+      <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
+    </div>
   );
 }
 
@@ -226,10 +295,10 @@ export default function SectionTable({ section, theme, token, onChange }) {
       <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <thead>
           <tr>
-            <th style={{ ...colHeader, width: "34%" }}>Link</th>
-            <th style={{ ...colHeader, width: "34%" }}>Name</th>
+            <th style={{ ...colHeader, width: "32%" }}>Link</th>
+            <th style={{ ...colHeader, width: "28%" }}>Name</th>
             <th style={{ ...colHeader, width: "10%", textAlign: "right" }}>QTY</th>
-            <th style={{ ...colHeader, width: "18%", textAlign: "right" }}>Cost</th>
+            <th style={{ ...colHeader, width: "26%", textAlign: "right" }}>Cost</th>
             <th style={{ ...colHeader, width: "4%" }} />
           </tr>
         </thead>

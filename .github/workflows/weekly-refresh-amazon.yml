@@ -1,9 +1,8 @@
-name: Weekly Amazon price refresh
+name: Amazon price refresh (biweekly)
 
 on:
   schedule:
-    - cron: "0 3 * * 0"   # Every Sunday 3:00 AM UTC. Adjust as needed.
-    # For biweekly instead, swap for: "0 3 1,15 * *" (1st and 15th of month)
+    - cron: "0 0 1,15 * *"   # Midnight UTC on the 1st and 15th of each month (~every 2 weeks)
   workflow_dispatch: {}
 
 jobs:
