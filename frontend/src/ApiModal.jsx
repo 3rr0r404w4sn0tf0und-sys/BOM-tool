@@ -26,6 +26,7 @@ function CopyRow({ label, value, theme }) {
         }}
       >
         <code
+          className="bom-api-modal-scroll"
           style={{
             flex: 1, fontSize: 12, color: theme.text, overflowX: "auto", whiteSpace: "nowrap",
             fontFamily: "monospace",
@@ -58,8 +59,19 @@ export default function ApiModal({ bom, theme, onClose }) {
         display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
       }}
     >
+      {/* Dark, thin scrollbars for the horizontally-scrolling code/url rows
+          below -- overrides the OS-default light scrollbar (WebKit) that
+          otherwise shows up as a jarring white bar against the dark modal. */}
+      <style>{`
+        .bom-api-modal-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+        .bom-api-modal-scroll::-webkit-scrollbar-track { background: transparent; }
+        .bom-api-modal-scroll::-webkit-scrollbar-thumb { background: ${theme.border}; border-radius: 3px; }
+        .bom-api-modal-scroll::-webkit-scrollbar-thumb:hover { background: ${theme.muted}; }
+        .bom-api-modal-scroll { scrollbar-width: thin; scrollbar-color: ${theme.border} transparent; }
+      `}</style>
       <div
         onClick={(e) => e.stopPropagation()}
+        className="bom-api-modal-scroll"
         style={{
           width: "100%", maxWidth: 560, maxHeight: "85vh", overflowY: "auto",
           background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 28,
@@ -91,6 +103,7 @@ export default function ApiModal({ bom, theme, onClose }) {
           Extensions → Apps Script, paste this, then use <code>=BOM_ROWS()</code> in a cell:
         </p>
         <pre
+          className="bom-api-modal-scroll"
           style={{
             background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 10,
             fontSize: 11, overflowX: "auto", fontFamily: "monospace", color: theme.text, margin: "0 0 14px",
@@ -106,6 +119,7 @@ export default function ApiModal({ bom, theme, onClose }) {
           Call it from a Scheduled Action / server action (Settings → Technical → Automation):
         </p>
         <pre
+          className="bom-api-modal-scroll"
           style={{
             background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 10,
             fontSize: 11, overflowX: "auto", fontFamily: "monospace", color: theme.text, margin: "0 0 4px",
