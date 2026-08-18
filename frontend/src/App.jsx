@@ -224,6 +224,13 @@ export default function App() {
     return null;
   }
 
+  // Live (as-you-type) mismatch check, distinct from clientValidate()'s
+  // on-submit check -- only flags once confirmPassword has content, so the
+  // field doesn't turn red before the user's typed anything into it yet.
+  const passwordsMismatch = mode === "register" && confirmPassword.length > 0 && password !== confirmPassword;
+  const registerDisabled =
+    authLoading || !email || !password || (mode === "register" && (!confirmPassword || passwordsMismatch));
+
   async function login() {
     const validationError = clientValidate();
     if (validationError) return setAuthError(validationError);
@@ -522,17 +529,24 @@ export default function App() {
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  style={{ width: "100%", padding: 10, marginBottom: 8, boxSizing: "border-box", border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 14, background: theme.bg, color: theme.text }}
+                  style={{
+                    width: "100%", padding: 10, marginBottom: passwordsMismatch ? 4 : 8, boxSizing: "border-box",
+                    border: `1px solid ${passwordsMismatch ? theme.errText : theme.border}`, borderRadius: 8,
+                    fontSize: 14, background: theme.bg, color: theme.text,
+                  }}
                 />
+              )}
+              {passwordsMismatch && (
+                <p style={{ color: theme.errText, fontSize: 12.5, margin: "0 0 8px" }}>Passwords don't match</p>
               )}
 
               <button
                 onClick={mode === "login" ? login : register}
-                disabled={authLoading || !email || !password || (mode === "register" && !confirmPassword)}
+                disabled={registerDisabled}
                 style={{
-                  width: "100%", padding: 11, marginTop: 4, cursor: "pointer",
+                  width: "100%", padding: 11, marginTop: 4, cursor: registerDisabled ? "default" : "pointer",
                   border: "none", borderRadius: 8, background: theme.accent, color: theme.accentText, fontSize: 14, fontWeight: 600,
-                  opacity: authLoading || !email || !password || (mode === "register" && !confirmPassword) ? 0.5 : 1,
+                  opacity: registerDisabled ? 0.5 : 1,
                 }}
               >
                 {authLoading ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
