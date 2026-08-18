@@ -4,7 +4,7 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import WakingUp from "./WakingUp.jsx";
+import ThemeTransition from "./ThemeTransition.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
@@ -34,6 +34,7 @@ export default function App() {
   const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
+  const [themeTransitionMode, setThemeTransitionMode] = useState(null); // null | "blastoff" | "landing"
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [justRegisteredEmail, setJustRegisteredEmail] = useState(null);
   const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
@@ -41,6 +42,7 @@ export default function App() {
   const [canvasMenu, setCanvasMenu] = useState(null);
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
   const [bomListLoading, setBomListLoading] = useState(false);
+  const [openingBomId, setOpeningBomId] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
@@ -65,6 +67,9 @@ export default function App() {
     setThemeName((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       persistThemeName(next);
+      // Overlay covers the swap below (blastoff = heading INTO dark,
+      // landing = heading INTO light) then fades itself out once painted.
+      setThemeTransitionMode(next === "dark" ? "blastoff" : "landing");
       return next;
     });
   }
@@ -307,10 +312,12 @@ export default function App() {
   }
 
   async function loadBom(id) {
+    setOpeningBomId(id);
     const res = await fetch(`${API_URL}/api/boms/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     setBom(await res.json());
+    setOpeningBomId(null);
   }
 
   async function loadBomList() {
@@ -431,6 +438,9 @@ export default function App() {
   if (!token) {
     return (
       <div style={pageShell}>
+        {themeTransitionMode && (
+          <ThemeTransition mode={themeTransitionMode} onDone={() => setThemeTransitionMode(null)} />
+        )}
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div style={{ width: 340, maxWidth: "100%", position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -569,6 +579,9 @@ export default function App() {
 
   return (
     <div style={pageShell}>
+      {themeTransitionMode && (
+        <ThemeTransition mode={themeTransitionMode} onDone={() => setThemeTransitionMode(null)} />
+      )}
       <div
         style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
         onContextMenu={(e) => {
@@ -594,6 +607,12 @@ export default function App() {
           />
         </div>
 
+        <style>{`
+          @keyframes bom-spin { to { transform: rotate(360deg); } }
+          @keyframes bom-view-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+          .bom-view-enter { animation: bom-view-enter 220ms ease-out; }
+        `}</style>
+
         {user && !user.email_verified && (
           <div style={{ background: theme.warnBg, color: theme.warnText, padding: "10px 14px", borderRadius: 10, marginBottom: 20, fontSize: 13.5, display: "flex", alignItems: "flex-start", gap: 8 }}>
             <span style={{ flexShrink: 0, marginTop: 2 }}><IconEnvelope size={15} color={theme.warnText} /></span>
@@ -614,7 +633,7 @@ export default function App() {
         )}
 
         {!bom && (
-          <div>
+          <div key="bom-list" className="bom-view-enter">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text }}>Your BOMs</h2>
               <button
@@ -675,12 +694,26 @@ export default function App() {
                   >
                     <button
                       onClick={() => loadBom(b.id)}
+                      disabled={openingBomId === b.id}
                       style={{
                         display: "flex", alignItems: "center", gap: 10, border: "none", background: "none",
-                        cursor: "pointer", fontSize: 14, fontWeight: 600, color: theme.text, textAlign: "left", flex: 1,
+                        cursor: openingBomId === b.id ? "default" : "pointer", fontSize: 14, fontWeight: 600,
+                        color: theme.text, textAlign: "left", flex: 1,
+                        opacity: openingBomId && openingBomId !== b.id ? 0.45 : 1,
+                        transition: "opacity 150ms ease",
                       }}
                     >
-                      <IconFolder size={16} color={theme.muted} />
+                      {openingBomId === b.id ? (
+                        <span
+                          style={{
+                            width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                            border: `2px solid ${theme.border}`, borderTopColor: theme.text,
+                            animation: "bom-spin 0.6s linear infinite",
+                          }}
+                        />
+                      ) : (
+                        <IconFolder size={16} color={theme.muted} />
+                      )}
                       {b.title}
                     </button>
                     <button
@@ -698,7 +731,7 @@ export default function App() {
         )}
 
         {bom && (
-          <div>
+          <div key={`bom-detail-${bom.id}`} className="bom-view-enter">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                 <button
