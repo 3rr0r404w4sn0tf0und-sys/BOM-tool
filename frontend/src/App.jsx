@@ -5,6 +5,7 @@ import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
 import ThemeTransition from "./ThemeTransition.jsx";
+import WakingUp from "./WakingUp.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
