@@ -4,7 +4,7 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import ApiModal from "./ApiModal.jsx";
+import WakingUp from "./WakingUp.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
@@ -377,7 +377,7 @@ export default function App() {
   if (authChecking) {
     return (
       <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: theme.muted, fontSize: 14 }}>Loading…</div>
+        <WakingUp theme={theme} />
       </div>
     );
   }
@@ -556,11 +556,7 @@ export default function App() {
                 <p style={{ color: theme.errText, fontSize: 13, marginTop: 10 }}>{authError}</p>
               )}
 
-              {authLoading && (
-                <p style={{ color: theme.muted, fontSize: 12, marginTop: 8 }}>
-                  First request can take 30-50s if the server was asleep.
-                </p>
-              )}
+              {authLoading && <WakingUp theme={theme} />}
             </div>
           </div>
         </div>
