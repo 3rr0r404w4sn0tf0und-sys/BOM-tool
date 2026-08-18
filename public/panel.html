@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<!--
+  Onshape -> GitHub side-panel app.
+  Copyright (C) 2026  WanChengJunWang
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as published
+  by the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version. See the LICENSE file for the full text.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<title>CAD → GitHub</title>
+<style>
+  * { box-sizing: border-box; }
+  html { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
+  body { font-family: -apple-system, sans-serif; font-size:12px; background:#1e1f22; color:#eee; margin:0; padding:10px; }
+  h4 { margin: 10px 0 6px; font-size:10px; text-transform:uppercase; opacity:0.55; letter-spacing:0.05em; }
+  button { cursor:pointer; font-family:inherit; }
+
+  /* ---- custom, auto-hiding, low-sensitivity scrollbars (dark mode) ---- */
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.10); border-radius:10px; transition: background .25s ease; }
+  ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.35); }
+  .scroll-thin { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.10) transparent; }
+  .scroll-thin::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.06); }
+  .scroll-thin.scrolling::-webkit-scrollbar-thumb,
+  .scroll-thin:hover::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.32); }
+
+  /* ---- login view ---- */
+  #loginView { display:flex; flex-direction:column; align-items:center; justify-content:center; height:80vh; gap:14px; text-align:center; }
+  #loginView button { background:#24292f; color:white; border:1px solid #444; padding:10px 16px; border-radius:6px; font-size:12px; }
+
+  /* ---- repo picker view ---- */
+  #repoPickerView { display:none; }
+  .repo-row { display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-radius:5px; background:#2b2d31; margin-bottom:5px; font-size:11px; }
+  .repo-row button { background:#2ea043; color:white; border:none; border-radius:4px; padding:4px 8px; font-size:10px; }
+  .repo-row button.secondary { background:#3a3b3e; }
+  #repoSearch { width:100%; padding:6px; margin-bottom:8px; background:#2b2d31; color:#eee; border:1px solid #444; border-radius:4px; }
+  #repoList { max-height:60vh; overflow-y:auto; }
+
+  /* ---- main tool view (unchanged from before) ---- */
+  #mainView { display:none; }
+  #topBar { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:11px; opacity:0.8; }
+  #topBar button { background:none; border:none; color:#8ab4f8; text-decoration:underline; font-size:11px; padding:0; }
+
+  #treePane, #stagePane { background:#26282c; border-radius:6px; border:1px solid #3a3b3e; padding:8px; overflow-y:auto; }
+  #treePane { height: 26vh; }
+  #stagePane { height: 18vh; margin-top:8px; }
+  .tree-icon { flex-shrink:0; opacity:0.75; }
+  .tree-toggle { flex-shrink:0; width:12px; text-align:center; cursor:pointer; opacity:0.5; user-select:none; }
+  .tree-toggle:hover { opacity:1; }
+
+  .tree-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .icon-btn { width:20px; height:20px; border-radius:4px; border:1px solid #444; background:#2b2d31; color:#aaa; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; }
+  .icon-btn:hover { background:#3a3b3e; }
+
+  .tree-node { padding-left:14px; position:relative; font-family: ui-monospace, monospace; font-size:11px; }
+  .tree-line { position:absolute; left:5px; top:0; bottom:0; width:1px; background:#444; }
+  .tree-line.target-line { width:2px; background:#5865F2; }
+  .row { display:flex; align-items:center; justify-content:space-between; padding:2px 4px; border-radius:4px; cursor:grab; }
+  .row.folder { font-weight:600; }
+  .row.dragover { background:#5865F2 !important; }
+  #treeRoot.dragover { outline:2px dashed #5865F2; outline-offset:-2px; border-radius:4px; }
+  #dragHint { display:none; position:fixed; z-index:9999; background:#5865F2; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; pointer-events:none; font-family:ui-monospace,monospace; white-space:nowrap; }
+  .row.flying-away { transform: translateX(30px) scale(0.85); opacity:0; transition: all 0.35s ease; }
+  .row.pending-new { color:#7ee787; }
+  .row.pending-new .tree-icon { color:#7ee787; }
+  .row.pending-delete { color:#e5534b; text-decoration:line-through; opacity:0.6; }
+  .row.drop-before { box-shadow: inset 0 2px 0 0 #5865F2; }
+  .row.drop-after { box-shadow: inset 0 -2px 0 0 #5865F2; }
+  .empty-drop { margin-left:16px; padding:5px 8px; font-size:10px; font-style:italic; opacity:0.4; border:1px dashed #444; border-radius:4px; }
+  .empty-drop.dragover { background:#5865F2; border-color:#5865F2; color:#fff; opacity:1; }
+  .row-label { display:flex; align-items:center; gap:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row-actions { display:flex; gap:8px; flex-shrink:0; opacity:0.6; }
+  .row-actions span { cursor:pointer; }
+  .row-actions span:hover { opacity:1; }
+
+  input.tree-inline-input { width:100%; padding:3px 5px; background:#1e1f22; color:#eee; border:1px solid #5865F2; border-radius:3px; font-size:11px; font-family: ui-monospace, monospace; }
+
+  .stage-card { background:#2b2d31; border:1px solid #444; border-radius:5px; padding:6px 8px; margin-bottom:6px; cursor:grab; display:flex; align-items:center; justify-content:space-between; border-top:2px solid transparent; border-bottom:2px solid transparent; }
+  .stage-card.dragging { opacity:0.35; }
+  .stage-card.dimmed { opacity:0.25; pointer-events:none; transition: opacity 0.2s; }
+  .stage-card { transition: opacity 0.2s; }
+  .stage-card.drop-before { border-top-color:#5865F2; }
+  .stage-card.drop-after { border-bottom-color:#5865F2; }
+  .stage-card input.rename-input { width:100%; padding:3px 5px; background:#1e1f22; color:#eee; border:1px solid #5865F2; border-radius:3px; font-size:11px; }
+  .stage-card .row-label { font-size:11px; }
+  .stage-card .row-actions { gap:10px; }
+
+  #settingsPane { background:#26282c; border-radius:6px; border:1px solid #3a3b3e; padding:8px; margin-top:8px; }
+  .settings-top { display:flex; justify-content:space-between; align-items:center; }
+  label.check { display:flex; align-items:center; gap:5px; font-size:11px; color:#ccc; }
+
+  #uploadBtn { width:100%; margin-top:10px; padding:9px; background:#2ea043; color:white; border:none; border-radius:5px; font-weight:600; cursor:pointer; font-size:12px; }
+  #uploadBtn:disabled { opacity:0.5; cursor:not-allowed; }
+  #status { margin-top:8px; font-size:11px; opacity:0.8; white-space:pre-wrap; }
+
+  #partSelectWrap { margin-bottom:8px; }
+  select { width:100%; padding:5px; background:#2b2d31; color:#eee; border:1px solid #444; border-radius:4px; font-size:11px; }
+
+  #privacyOverlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10000; align-items:center; justify-content:center; padding:16px; }
+  #privacyOverlay.visible { display:flex; }
+  #privacyModal { background:#25262a; border:1px solid #3a3b3e; border-radius:8px; padding:16px; max-width:420px; max-height:80vh; overflow-y:auto; font-size:11px; line-height:1.5; }
+  #privacyModal h3 { margin:0 0 8px; font-size:13px; }
+  #privacyModal ul { margin:6px 0; padding-left:18px; }
+  #privacyModal button { width:100%; margin-top:12px; padding:8px; background:#2ea043; color:#fff; border:none; border-radius:5px; font-weight:600; cursor:pointer; font-size:12px; }
+
+  #tosOverlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10000; align-items:center; justify-content:center; padding:16px; }
+  #tosOverlay.visible { display:flex; }
+  #tosModal { background:#25262a; border:1px solid #3a3b3e; border-radius:8px; padding:16px; max-width:420px; max-height:80vh; overflow-y:auto; font-size:11px; line-height:1.5; }
+  #tosModal h3 { margin:0 0 8px; font-size:13px; }
+  #tosModal ul { margin:6px 0; padding-left:18px; }
+  #tosModal button { width:100%; margin-top:12px; padding:8px; background:#2ea043; color:#fff; border:none; border-radius:5px; font-weight:600; cursor:pointer; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="privacyOverlay">
+  <div id="privacyModal">
+    <h3>What this app can see and store</h3>
+    <p><strong>GitHub</strong> — your username and avatar, plus full read/write
+      access to your repositories (that's what the <code>repo</code> OAuth
+      scope grants). This app only ever touches the one repo you actively
+      pick, but the token itself isn't scoped narrower than that by GitHub.</p>
+    <p><strong>Onshape</strong> — your profile and read-only access to your
+      documents, used to list parts in the open Part Studio and export them.
+      This app never writes to, deletes, or modifies anything in Onshape.</p>
+    <p><strong>Stored server-side</strong> (Postgres, tied to your session
+      cookie, ~1 year unless you sign out or clear cookies):</p>
+    <ul>
+      <li>GitHub username, avatar URL, and access token</li>
+      <li>Onshape access + refresh tokens</li>
+      <li>Your default/active repo selection</li>
+    </ul>
+    <p>No email address is collected. Nothing is sold or shared with third
+      parties. Tokens are only ever used to carry out actions you actively
+      initiate in the panel (staging/uploading).</p>
+    <button id="privacyAcceptBtn">Got it</button>
+  </div>
+</div>
+
+<div id="tosOverlay">
+  <div id="tosModal">
+    <h3>Terms of Service</h3>
+    <p>This app is free and <strong>AGPLv3</strong>-licensed, and is
+      provided <strong>as-is, with no warranty of any kind</strong>. You
+      use it at your own risk.</p>
+    <p>This app can <strong>create, rename, overwrite, archive, and
+      delete files</strong> in whatever GitHub repo you select, based on
+      what you stage. You're responsible for reviewing staged changes
+      before clicking <strong>Upload to GitHub</strong> — the author isn't
+      liable for lost, overwritten, or corrupted files, bad commits, or
+      any other repo damage resulting from use of this app.</p>
+    <p>This app depends on the GitHub and Onshape APIs, which are outside
+      the author's control — their availability, rate limits, or behavior
+      may change at any time.</p>
+    <p>Full terms: <a href="https://github.com/3rr0r404w4sn0tf0und-sys/Github-Onshape-Upload/blob/main/TERMS.md" target="_blank" rel="noopener" style="color:inherit;">TERMS.md</a></p>
+    <button id="tosAcceptBtn">Got it</button>
+  </div>
+</div>
+<div id="dragHint"></div>
+
+<div id="loginView">
+  <div style="font-size:13px; opacity:0.8;">Connect both accounts to get started</div>
+  <button id="githubLoginBtn">Sign in with GitHub</button>
+  <button id="onshapeLoginBtn">Sign in with Onshape</button>
+  <div id="onshapeStatus" style="font-size:10px; opacity:0.6;"></div>
+</div>
+
+<div id="repoPickerView">
+  <div id="topBar" style="display:none;"></div>
+  <h4>Choose a repo to work with</h4>
+  <input id="repoSearch" placeholder="Search your repos…" />
+  <div id="repoList" class="scroll-thin"></div>
+</div>
+
+<div id="mainView">
+  <div id="topBar"></div>
+
+  <div id="partSelectWrap">
+    <label style="font-size:10px; opacity:0.6;">Parts in current tab</label>
+    <input type="text" id="partSearch" placeholder="Search parts…" style="width:100%; margin:3px 0; padding:4px 6px; background:#1e1f22; color:#eee; border:1px solid #444; border-radius:3px; font-size:11px; box-sizing:border-box;">
+    <select id="partSelect" multiple size="4"></select>
+    <button class="icon-btn" id="stageBtn" style="width:100%; margin-top:4px;">Stage selected parts →</button>
+  </div>
+
+  <h4>File tree (drag a staged file onto one to replace it, drag files/folders to reorganize)</h4>
+  <div id="treePane" class="scroll-thin"><div style="opacity:0.5;">Loading…</div></div>
+
+  <h4>Staged for upload (drag to reorder)</h4>
+  <div id="stagePane" class="scroll-thin"><div style="opacity:0.5; font-size:11px;">Stage parts above</div></div>
+
+  <div id="settingsPane">
+    <div class="settings-top">
+      <label class="check"><input type="checkbox" id="staticCheck" /> Static (merge staged into one file)</label>
+      <span style="display:flex; gap:8px; opacity:0.6;">
+        <span class="icon-btn" id="undoBtn" title="Undo">↶</span>
+        <span class="icon-btn" id="redoBtn" title="Redo">↷</span>
+      </span>
+    </div>
+    <label class="check" style="margin-top:6px;"><input type="checkbox" id="deleteInsteadCheck" /> Delete instead of archiving replaced files</label>
+    <label style="font-size:10px; opacity:0.6; margin-top:8px;">File format</label>
+    <select id="formatSelect">
+      <option value="STEP">STEP</option>
+      <option value="STL">STL</option>
+      <option value="OBJ">OBJ</option>
+      <option value="PARASOLID">Parasolid</option>
+      <option value="IGES">IGES</option>
+      <option value="SOLIDWORKS">SolidWorks</option>
+    </select>
+
+    <label style="font-size:10px; opacity:0.6; margin-top:8px; display:block;">Commit prefix <span style="opacity:0.7;">(replaces "feat:"/"chore:" on every message this upload makes - leave blank for default)</span></label>
+    <input type="text" id="commitPrefixInput" placeholder="feat:" style="width:100%; margin:3px 0; padding:4px 6px; background:#1e1f22; color:#eee; border:1px solid #444; border-radius:3px; font-size:11px; box-sizing:border-box;">
+
+    <label style="font-size:10px; opacity:0.6; margin-top:6px; display:block;">Commit description <span style="opacity:0.7;">(optional extended body shown under the summary line on GitHub - {filename} is replaced per file)</span></label>
+    <textarea id="commitDescriptionInput" rows="2" placeholder="e.g. Synced from Onshape Part Studio via panel app." style="width:100%; margin:3px 0; padding:4px 6px; background:#1e1f22; color:#eee; border:1px solid #444; border-radius:3px; font-size:11px; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
+  </div>
+
+  <button id="uploadBtn">Upload to GitHub</button>
+  <div id="status"></div>
+
+  <div id="appFooter" style="margin-top:10px; padding-top:8px; border-top:1px solid #3a3b3e; font-size:10px; opacity:0.5; text-align:center;">
+    Created by WanChengJunWang · <a href="https://github.com/3rr0r404w4sn0tf0und-sys/Github-Onshape-Upload" target="_blank" rel="noopener" style="color:inherit;">Source (AGPLv3)</a> · <a href="https://github.com/3rr0r404w4sn0tf0und-sys/Github-Onshape-Upload" target="_blank" rel="noopener" style="color:inherit;">GitHub</a> · <a href="#" id="privacyReopenLink" style="color:inherit;">Privacy</a> · <a href="#" id="tosReopenLink" style="color:inherit;">Terms</a>
+  </div>
+</div>
+
+<script src="panel.js"></script>
+</body>
+</html>
