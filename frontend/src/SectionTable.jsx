@@ -77,14 +77,14 @@ function EditableCell({ value, placeholder, onCommit, theme, align, mono }) {
 // works for Amazon too -- it tries Apify then falls back to Playwright,
 // same as the scheduled jobs) then polls the parent's onRefresh a few
 // times since the result comes back async via a GitHub Actions callback.
-function RefreshButton({ item, theme, token, onRefresh, spin }) {
+function RefreshButton({ item, theme, token, onRefresh }) {
   const [firing, setFiring] = useState(false);
   const pollRef = useRef(null);
 
   useEffect(() => () => clearInterval(pollRef.current), []);
 
   async function fire() {
-    if (firing || item.status === "pending") return;
+    if (firing) return;
     setFiring(true);
     try {
       await fetch(`${API_URL}/api/boms/items/${item.id}/refresh`, {
@@ -106,24 +106,22 @@ function RefreshButton({ item, theme, token, onRefresh, spin }) {
     }, 4000);
   }
 
-  const busy = firing || item.status === "pending" || spin;
-
   return (
     <button
       onClick={fire}
-      disabled={busy}
+      disabled={firing}
       title="Refresh price now"
       style={{
-        border: "none", background: "none", cursor: busy ? "default" : "pointer",
-        padding: 2, display: "flex", color: theme.muted, opacity: busy ? 0.5 : 0.7,
+        border: "none", background: "none", cursor: firing ? "default" : "pointer",
+        padding: 2, display: "flex", color: theme.muted, opacity: firing ? 0.5 : 0.7,
       }}
-      onMouseEnter={(e) => !busy && (e.currentTarget.style.opacity = 1)}
-      onMouseLeave={(e) => !busy && (e.currentTarget.style.opacity = 0.7)}
+      onMouseEnter={(e) => !firing && (e.currentTarget.style.opacity = 1)}
+      onMouseLeave={(e) => !firing && (e.currentTarget.style.opacity = 0.7)}
     >
       <span
         style={{
           display: "flex",
-          animation: busy ? "bomToolSpin 900ms linear infinite" : "none",
+          animation: firing ? "bomToolSpin 900ms linear infinite" : "none",
         }}
       >
         <style>{`@keyframes bomToolSpin { to { transform: rotate(360deg); } }`}</style>
@@ -158,7 +156,7 @@ function CostCell({ item, theme, token, onResolved }) {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.muted }}>
           <IconClock size={12} color={theme.muted} /> pending…
         </span>
-        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} spin />
+        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
       </div>
     );
   }
