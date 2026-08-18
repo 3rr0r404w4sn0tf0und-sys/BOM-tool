@@ -1,0 +1,15 @@
+name = "printed-parts-calc"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# KV namespace for geometry blobs, price-fetch job status, and thumbnails.
+# Create with: wrangler kv namespace create GEOMETRY_KV
+kv_namespaces = [
+  { binding = "GEOMETRY_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+[vars]
+# Non-secret vars can go here. Secrets (GITHUB_TOKEN, INTERNAL_SCRAPE_SECRET)
+# are set via `wrangler secret put <NAME>` instead -- do not put them here.
+GITHUB_REPO = "your-github-username/printed-parts-calc"

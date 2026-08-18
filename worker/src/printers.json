@@ -1,0 +1,14 @@
+{
+  "h2d_pro": {
+    "name": "Bambu Lab H2D Pro",
+    "bed_mm": { "x": 350, "y": 320, "z": 325 },
+    "multi_material": true,
+    "max_ams_slots": 4
+  },
+  "qidi_plus4": {
+    "name": "Qidi Plus 4",
+    "bed_mm": { "x": 280, "y": 280, "z": 270 },
+    "multi_material": false,
+    "max_ams_slots": 1
+  }
+}
