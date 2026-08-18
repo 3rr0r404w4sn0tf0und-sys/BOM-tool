@@ -4,7 +4,7 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable } from "./Icons.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -38,6 +38,10 @@ export default function App() {
   const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
   const [authChecking, setAuthChecking] = useState(true);
   const [canvasMenu, setCanvasMenu] = useState(null);
+  const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
+  const [bomListLoading, setBomListLoading] = useState(false);
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const theme = getTheme(themeName);
 
   function persistToken(t) {
@@ -106,6 +110,7 @@ export default function App() {
     setToken(null);
     setUser(null);
     setBom(null);
+    setBomList(null);
     setEmail("");
     setPassword("");
     setConfirmPassword("");
@@ -278,16 +283,17 @@ export default function App() {
     }
   }
 
-  async function createBom() {
+  async function createBom(title) {
     const res = await fetch(`${API_URL}/api/boms`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ title: "My First BOM" }),
+      body: JSON.stringify({ title: title || "Untitled BOM" }),
     });
     const data = await res.json();
+    setBomList(null);
     loadBom(data.id);
   }
 
@@ -296,6 +302,44 @@ export default function App() {
       headers: { Authorization: `Bearer ${token}` },
     });
     setBom(await res.json());
+  }
+
+  async function loadBomList() {
+    setBomListLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/boms`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setBomList(await res.json());
+    } finally {
+      setBomListLoading(false);
+    }
+  }
+
+  function exitBom() {
+    setBom(null);
+    loadBomList();
+  }
+
+  async function renameBom() {
+    setTitleEditing(false);
+    const next = titleDraft.trim();
+    if (!next || next === bom.title) return;
+    await fetch(`${API_URL}/api/boms/${bom.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ title: next }),
+    });
+    setBomList(null);
+    loadBom(bom.id);
+  }
+
+  async function deleteBom(id) {
+    await fetch(`${API_URL}/api/boms/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    loadBomList();
   }
 
   async function addTable() {
@@ -307,6 +351,11 @@ export default function App() {
     });
     loadBom(bom.id);
   }
+
+  // Load the BOM list once we know who's logged in and haven't opened a BOM.
+  useEffect(() => {
+    if (token && user && !bom && bomList === null) loadBomList();
+  }, [token, user, bom, bomList]);
 
   const pageShell = {
     minHeight: "100vh",
@@ -553,42 +602,136 @@ export default function App() {
         )}
 
         {!bom && (
-          <div
-            style={{
-              background: theme.cardBg,
-              border: `1px dashed ${theme.border}`,
-              borderRadius: 14,
-              padding: "48px 24px",
-              textAlign: "center",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: 12, color: theme.muted }}>
-              <IconTable size={30} color={theme.muted} />
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text }}>Your BOMs</h2>
+              <button
+                onClick={() => createBom("Untitled BOM")}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "8px 14px", border: "none", borderRadius: 9,
+                  background: theme.accent, color: theme.accentText, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                <IconPlus size={14} /> New BOM
+              </button>
             </div>
-            <p style={{ color: theme.subtleText, fontSize: 14, margin: "0 0 18px" }}>
-              You don't have a BOM yet — create one to start adding tables and items.
-            </p>
-            <button
-              onClick={createBom}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 6,
-                padding: "10px 18px", border: "none", borderRadius: 9,
-                background: theme.accent, color: theme.accentText, fontSize: 14, fontWeight: 600, cursor: "pointer",
-              }}
-            >
-              <IconPlus size={15} /> Create a BOM
-            </button>
+
+            {bomListLoading && (
+              <p style={{ color: theme.muted, fontSize: 13.5, textAlign: "center", padding: "24px 0" }}>Loading…</p>
+            )}
+
+            {!bomListLoading && bomList && bomList.length === 0 && (
+              <div
+                style={{
+                  background: theme.cardBg,
+                  border: `1px dashed ${theme.border}`,
+                  borderRadius: 14,
+                  padding: "48px 24px",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 12, color: theme.muted }}>
+                  <IconTable size={30} color={theme.muted} />
+                </div>
+                <p style={{ color: theme.subtleText, fontSize: 14, margin: "0 0 18px" }}>
+                  You don't have a BOM yet — create one to start adding tables and items.
+                </p>
+                <button
+                  onClick={() => createBom("My First BOM")}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "10px 18px", border: "none", borderRadius: 9,
+                    background: theme.accent, color: theme.accentText, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlus size={15} /> Create a BOM
+                </button>
+              </div>
+            )}
+
+            {!bomListLoading && bomList && bomList.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {bomList.map((b) => (
+                  <div
+                    key={b.id}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10,
+                      padding: "12px 14px",
+                    }}
+                  >
+                    <button
+                      onClick={() => loadBom(b.id)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10, border: "none", background: "none",
+                        cursor: "pointer", fontSize: 14, fontWeight: 600, color: theme.text, textAlign: "left", flex: 1,
+                      }}
+                    >
+                      <IconFolder size={16} color={theme.muted} />
+                      {b.title}
+                    </button>
+                    <button
+                      onClick={() => deleteBom(b.id)}
+                      title="Delete BOM"
+                      style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted }}
+                    >
+                      <IconTrash size={14} color={theme.muted} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {bom && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: theme.text }}>{bom.title}</h2>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <button
+                  onClick={exitBom}
+                  title="Back to your BOMs"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 30, height: 30, flexShrink: 0, border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, cursor: "pointer",
+                  }}
+                >
+                  <IconArrowLeft size={14} color={theme.text} />
+                </button>
+
+                {titleEditing ? (
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onBlur={renameBom}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                    style={{
+                      fontSize: 18, fontWeight: 700, border: `1px solid ${theme.accent}`, borderRadius: 6,
+                      padding: "4px 8px", background: theme.cardBg, color: theme.text, minWidth: 0,
+                    }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setTitleDraft(bom.title); setTitleEditing(true); }}
+                    title="Rename BOM"
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, border: "none", background: "none", cursor: "pointer",
+                      fontSize: 18, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6, minWidth: 0,
+                    }}
+                  >
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bom.title}</span>
+                    <IconPencil size={12} color={theme.muted} />
+                  </button>
+                )}
+              </div>
+
               <button
                 onClick={addTable}
                 style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
+                  display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0,
                   padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
                   background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
                 }}

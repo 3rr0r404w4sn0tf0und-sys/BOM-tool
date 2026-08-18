@@ -223,7 +223,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
         </button>
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <thead>
           <tr>
             <th style={{ ...colHeader, width: "34%" }}>Link</th>
@@ -251,7 +251,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
               }}
               style={{ borderBottom: `1px solid ${theme.rowBorder}` }}
             >
-              <td style={{ padding: "2px 6px" }}>
+              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
                 <EditableCell
                   value={item.url}
                   placeholder="paste a link…"
@@ -260,7 +260,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
                   onCommit={(v) => patchItem(item.id, { url: v })}
                 />
               </td>
-              <td style={{ padding: "2px 6px" }}>
+              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
                 <EditableCell
                   value={item.name}
                   placeholder="item name"
@@ -268,7 +268,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
                   onCommit={(v) => patchItem(item.id, { name: v })}
                 />
               </td>
-              <td style={{ padding: "2px 6px" }}>
+              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
                 <EditableCell
                   value={String(item.qty ?? 1)}
                   placeholder="1"
