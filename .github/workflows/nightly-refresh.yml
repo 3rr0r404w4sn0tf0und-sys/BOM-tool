@@ -8,6 +8,7 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 45  # many items to loop through; still shouldn't hang forever
     steps:
       - uses: actions/checkout@v4
 
