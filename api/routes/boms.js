@@ -154,7 +154,16 @@ bomsRouter.patch("/items/:itemId", async (req, res) => {
     [name, url, qty, bold, italic, font_size, sort_order, unit_price, status, req.params.itemId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
-  res.json(result.rows[0]);
+  const item = result.rows[0];
+
+  // A URL was just set/changed via inline edit -- kick off a scrape right
+  // away instead of leaving the item stuck at its default "pending" status
+  // until someone notices and hits the manual refresh button.
+  if (url) {
+    triggerScrape(item.id, url).catch((e) => console.error("scrape trigger failed", e));
+  }
+
+  res.json(item);
 });
 
 bomsRouter.delete("/items/:itemId", async (req, res) => {

@@ -185,6 +185,18 @@ export default function SectionTable({ section, theme, token, onChange }) {
       body: JSON.stringify(patch),
     });
     onChange();
+
+    // Pasting/changing a URL kicks off a scrape server-side but the result
+    // comes back async -- poll a few times so the Cost cell updates itself
+    // instead of sitting at "pending" until someone hits manual refresh.
+    if (patch.url) {
+      let checks = 0;
+      const interval = setInterval(() => {
+        checks += 1;
+        onChange();
+        if (checks >= 8) clearInterval(interval);
+      }, 4000);
+    }
   }
 
   async function addRow() {
