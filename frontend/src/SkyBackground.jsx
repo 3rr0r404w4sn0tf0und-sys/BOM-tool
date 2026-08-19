@@ -14,7 +14,7 @@ const ASCENT_PHASES = [
   { name: "IGNITION", label: "IGNITION", duration: 900, to: { x: 16, y: 78, rot: 0, scale: 1 }, sky: 0.04, ease: easeOutCubic, flame: 0.6 },
   { name: "ASCENT", label: "MAX-Q", duration: 2200, to: { x: 24, y: 42, rot: -14, scale: 0.8 }, sky: 0.55, ease: easeInOutCubic, flame: 1 },
   { name: "STAGE_SEP", label: "STAGE SEP", duration: 650, to: { x: 26, y: 30, rot: -8, scale: 0.66 }, sky: 0.68, ease: easeOutCubic, flame: 0.7, spawnBooster: true },
-  { name: "EXO_ATMOSPHERE", label: "MECO", duration: 1300, to: { x: 30, y: 18, rot: 0, scale: 0.5 }, sky: 1, ease: easeOutCubic, flame: 0 },
+  { name: "EXO_ATMOSPHERE", label: "MECO", duration: 1300, to: { x: 30, y: 18, rot: 0, scale: 0.85 }, sky: 1, ease: easeOutCubic, flame: 0 },
 ];
 const REENTRY_PHASES = [
   { name: "DEORBIT", label: "DEORBIT BURN", duration: 650, to: (from) => ({ ...from, rot: 178, scale: from.scale * 1.15 }), sky: 0.92, ease: easeInCubic, flame: 0.5 },
@@ -53,9 +53,9 @@ function useCoords() {
 }
 
 function seededRand(seed) { const x = Math.sin(seed * 999) * 10000; return x - Math.floor(x); }
-const FILLER_STARS = Array.from({ length: 150 }, (_, i) => ({
+const FILLER_STARS = Array.from({ length: 110 }, (_, i) => ({
   x: seededRand(i) * 100, y: seededRand(i + 500) * 100,
-  size: 0.15 + seededRand(i + 900) * 0.35, delay: seededRand(i + 200) * 3, dur: 2 + seededRand(i + 300) * 2.5,
+  size: 0.05 + seededRand(i + 900) * 0.1, delay: seededRand(i + 200) * 3, dur: 2 + seededRand(i + 300) * 2.5,
 }));
 
 function StarField({ coords, styleRef }) {
@@ -77,7 +77,7 @@ function StarField({ coords, styleRef }) {
         return <line key={i} x1={toPct(sa.x)} y1={toPct(sa.y)} x2={toPct(sb.x)} y2={toPct(sb.y)} stroke="#93c5fd" strokeWidth="0.12" opacity="0.35" />;
       })}
       {stars.map((s) => {
-        const size = Math.max(0.3, (2.2 - s.mag) * 0.32);
+        const size = Math.max(0.08, (2.2 - s.mag) * 0.09);
         return <circle key={s.name} cx={toPct(s.x)} cy={toPct(s.y)} r={size} fill="#f8fafc" style={{ animation: `bom-sky-twinkle ${2.4 + (s.mag % 1)}s ease-in-out ${(s.mag * 0.7) % 2}s infinite` }} />;
       })}
     </svg>
@@ -86,11 +86,11 @@ function StarField({ coords, styleRef }) {
 
 function Clouds() {
   const puffs = [
-    { top: "58%", left: "-8%", scale: 1.6, dur: "55s", delay: "0s" },
-    { top: "70%", left: "15%", scale: 1.2, dur: "68s", delay: "-12s" },
-    { top: "50%", left: "45%", scale: 1.8, dur: "48s", delay: "-24s" },
-    { top: "75%", left: "65%", scale: 1.1, dur: "72s", delay: "-6s" },
-    { top: "62%", left: "85%", scale: 1.4, dur: "60s", delay: "-33s" },
+    { top: "14%", left: "-8%", scale: 1.6, dur: "55s", delay: "0s" },
+    { top: "26%", left: "15%", scale: 1.2, dur: "68s", delay: "-12s" },
+    { top: "10%", left: "45%", scale: 1.8, dur: "48s", delay: "-24s" },
+    { top: "32%", left: "65%", scale: 1.1, dur: "72s", delay: "-6s" },
+    { top: "20%", left: "85%", scale: 1.4, dur: "60s", delay: "-33s" },
   ];
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
@@ -112,8 +112,8 @@ function GroundScene({ figuresActive }) {
         <path d="M0 14 Q200 0 400 14 L400 60 L0 60 Z" fill="#4b5563" opacity="0.9" />
       </svg>
       {[{ left: "20%", flip: false }, { left: "27%", flip: true }].map((f, i) => (
-        <svg key={i} width="10" height="20" viewBox="0 0 10 20" style={{
-          position: "absolute", left: f.left, bottom: "38%", transform: f.flip ? "scaleX(-1)" : "none",
+        <svg key={i} width="26" height="52" viewBox="0 0 10 20" style={{
+          position: "absolute", left: f.left, bottom: "36%", transform: f.flip ? "scaleX(-1)" : "none",
           animation: `bom-sky-figure ${figuresActive ? "0.9s" : "2.6s"} ease-in-out infinite`, animationDelay: `${i * 0.3}s`,
         }} fill="none" stroke="#e5e7eb" strokeWidth="1.1" strokeLinecap="round">
           <circle cx="5" cy="3" r="1.6" />
@@ -161,6 +161,8 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
   // where the rocket arrived so idle-drift orbits around that point instead
   // of snapping to a fixed spot.
   const spaceAnchorRef = useRef({ x: 30, y: 18 });
+  const idleEnterRef = useRef(0);
+  const idleBaseRotRef = useRef(0);
 
   function applyTransform() {
     const { x, y, rot, scale } = liveRef.current;
@@ -241,21 +243,26 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
           }
         }
       } else {
-        // Resting idle motion -- still updates liveRef continuously so the
-        // next transition always starts from a real, current position.
+        // Resting idle motion -- offsets are zero-anchored to the moment we
+        // *entered* idle (idleEnterRef), and rotation continues from
+        // wherever the rocket's rotation actually was, so there's no jump
+        // when the phase machine hands off into this branch.
+        if (idleEnterRef.current === 0) {
+          idleEnterRef.current = now;
+          idleBaseRotRef.current = liveRef.current.rot;
+        }
+        const localT = (now - idleEnterRef.current) / 1000;
         if (isDark) {
-          const t = now / 1000;
           const anchor = spaceAnchorRef.current;
           liveRef.current = {
-            x: anchor.x + Math.sin(t / 6) * 6,
-            y: anchor.y + Math.cos(t / 8) * 5,
-            rot: (t * 12) % 360,
-            scale: 0.5,
+            x: anchor.x + Math.sin(localT / 6) * 6,
+            y: anchor.y + Math.sin(localT / 8) * 5,
+            rot: idleBaseRotRef.current + localT * 10,
+            scale: 0.85,
           };
           skyRef.current = 1;
         } else {
-          const t = now / 1000;
-          liveRef.current = { x: PAD.x, y: PAD.y + Math.sin(t / 2) * 0.6, rot: Math.sin(t / 3) * 1.5, scale: 1 };
+          liveRef.current = { x: PAD.x, y: PAD.y + Math.sin(localT / 2) * 0.6, rot: idleBaseRotRef.current, scale: 1 };
           skyRef.current = 0;
         }
         applyTransform();
@@ -275,7 +282,7 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
     if (reducedMotion) {
       // Respect prefers-reduced-motion: snap straight to the end state with
       // just a short opacity crossfade instead of the full choreography.
-      const end = transitionMode === "blastoff" ? { x: 30, y: 18, rot: 0, scale: 0.5 } : { ...PAD };
+      const end = transitionMode === "blastoff" ? { x: 30, y: 18, rot: 0, scale: 0.85 } : { ...PAD };
       liveRef.current = end;
       skyRef.current = transitionMode === "blastoff" ? 1 : 0;
       applyTransform();
@@ -290,6 +297,7 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
     skyFromRef.current = skyRef.current;
     phaseStartRef.current = 0;
     phaseIdxRef.current = 0;
+    idleEnterRef.current = 0; // re-anchor idle drift fresh next time we settle
     missionStartRef.current = performance.now();
     setPhaseLabel(seq[0].label);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -298,7 +306,7 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 0, overflow: "hidden", pointerEvents: "none" }}>
       <style>{`
-        @keyframes bom-sky-twinkle { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+        @keyframes bom-sky-twinkle { 0%,100% { opacity: 0.25; } 50% { opacity: 0.75; } }
         @keyframes bom-sky-flame { 0%,100% { transform: translateX(-50%) scaleY(1); } 50% { transform: translateX(-50%) scaleY(1.35); } }
         @keyframes bom-sky-drift-cloud { from { transform: translateX(0); } to { transform: translateX(130vw); } }
         @keyframes bom-sky-figure { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-6deg); } }
@@ -322,14 +330,14 @@ export default function SkyBackground({ themeName, transitionMode, onTransitionD
       <div ref={rocketRef} style={{ position: "absolute", left: `${PAD.x}%`, top: `${PAD.y}%`, transform: "translate(-50%,-50%)", color: "#F2F2ED" }}>
         <div style={{ position: "relative" }}>
           <div ref={chuteRef} style={{ position: "absolute", left: "50%", bottom: "100%", transform: "translateX(-50%)", opacity: 0 }}>
-            <svg width="34" height="26" viewBox="0 0 34 26" fill="none" stroke="#e2e8f0" strokeWidth="1.4">
+            <svg width="64" height="49" viewBox="0 0 34 26" fill="none" stroke="#e2e8f0" strokeWidth="1.4">
               <path d="M1 14 Q17 -2 33 14" fill="#FF6B35" stroke="#dc2626" />
               <line x1="4" y1="14" x2="12" y2="24" /><line x1="17" y1="14" x2="15" y2="24" /><line x1="30" y1="14" x2="19" y2="24" />
             </svg>
           </div>
-          <div ref={plasmaRef} style={{ position: "absolute", inset: -10, borderRadius: "50%", background: "radial-gradient(circle, #FFD23F 0%, #FF5A36 45%, transparent 75%)", opacity: 0, filter: "blur(2px)" }} />
-          <RocketIcon color="currentColor" size={30} />
-          <div ref={flameRef} style={{ position: "absolute", bottom: -8, left: "50%", width: 6, height: 14, borderRadius: "0 0 6px 6px", background: "linear-gradient(180deg,#FFF6D5,#FFB347 55%,#FF6B35)", opacity: 0, animation: "bom-sky-flame 0.2s ease-in-out infinite" }} />
+          <div ref={plasmaRef} style={{ position: "absolute", inset: -20, borderRadius: "50%", background: "radial-gradient(circle, #FFD23F 0%, #FF5A36 45%, transparent 75%)", opacity: 0, filter: "blur(3px)" }} />
+          <RocketIcon color="currentColor" size={58} />
+          <div ref={flameRef} style={{ position: "absolute", bottom: -15, left: "50%", width: 11, height: 27, borderRadius: "0 0 11px 11px", background: "linear-gradient(180deg,#FFF6D5,#FFB347 55%,#FF6B35)", opacity: 0, animation: "bom-sky-flame 0.2s ease-in-out infinite" }} />
         </div>
       </div>
 
