@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
@@ -45,6 +45,7 @@ export default function App() {
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
   const [bomListLoading, setBomListLoading] = useState(false);
   const [openingBomId, setOpeningBomId] = useState(null);
+  const mainContentRef = useRef(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
@@ -588,9 +589,10 @@ export default function App() {
 
   return (
     <div style={pageShell}>
-      <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
+      <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} contentRef={mainContentRef} />
       <div
-        style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
+        ref={mainContentRef}
+        style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box", willChange: "transform" }}
         onContextMenu={(e) => {
           // Blank-canvas right click -> "Add table". Clicks inside a
           // SectionTable stop propagation and show their own menu instead.
