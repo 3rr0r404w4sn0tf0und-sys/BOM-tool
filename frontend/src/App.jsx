@@ -4,8 +4,9 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import ThemeTransition from "./ThemeTransition.jsx";
+import SkyBackground from "./SkyBackground.jsx";
 import WakingUp from "./WakingUp.jsx";
+import ApiModal from "./ApiModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
@@ -378,21 +379,28 @@ export default function App() {
     minHeight: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: theme.bg,
+    background: "transparent", // SkyBackground (fixed, behind everything) paints the real bg now
     fontFamily: "sans-serif",
+    position: "relative",
+    zIndex: 1,
   };
 
   if (authChecking) {
     return (
-      <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
-        <WakingUp theme={theme} />
-      </div>
+      <>
+        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
+        <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
+          <WakingUp theme={theme} />
+        </div>
+      </>
     );
   }
 
   if (justRegisteredEmail) {
     return (
-      <div style={pageShell}>
+      <>
+        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
+        <div style={pageShell}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div
             style={{
@@ -432,7 +440,8 @@ export default function App() {
         </div>
         <Footer theme={theme} onPrivacyClick={() => setShowPrivacy(true)} />
         {showPrivacy && <PrivacyModal theme={theme} onClose={() => setShowPrivacy(false)} />}
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -440,7 +449,7 @@ export default function App() {
     return (
       <div style={pageShell}>
         {themeTransitionMode && (
-          <ThemeTransition mode={themeTransitionMode} onDone={() => setThemeTransitionMode(null)} />
+          <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
         )}
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div style={{ width: 340, maxWidth: "100%", position: "relative" }}>
@@ -581,7 +590,7 @@ export default function App() {
   return (
     <div style={pageShell}>
       {themeTransitionMode && (
-        <ThemeTransition mode={themeTransitionMode} onDone={() => setThemeTransitionMode(null)} />
+        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
       )}
       <div
         style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
