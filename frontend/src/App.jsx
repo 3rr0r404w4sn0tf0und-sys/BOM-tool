@@ -448,9 +448,7 @@ export default function App() {
   if (!token) {
     return (
       <div style={pageShell}>
-        {themeTransitionMode && (
-          <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
-        )}
+        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div style={{ width: 340, maxWidth: "100%", position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -589,9 +587,7 @@ export default function App() {
 
   return (
     <div style={pageShell}>
-      {themeTransitionMode && (
-        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
-      )}
+      <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
       <div
         style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
         onContextMenu={(e) => {

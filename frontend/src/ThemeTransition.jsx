@@ -16,14 +16,13 @@ const STARS = [
   { top: "50%", left: "88%", delay: "0.75s" },
 ];
 
-function RocketIcon({ color = "#f1f5f9" }) {
+export function RocketIcon({ color = "#f1f5f9", size = 40 }) {
   return (
-    <svg width="40" height="64" viewBox="0 0 40 64" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size * 1.6} viewBox="0 0 40 64" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 2c7 8 8 20 8 28 0 6-2 10-8 14-6-4-8-8-8-14 0-8 1-20 8-28Z" />
       <circle cx="20" cy="24" r="4" />
       <path d="M12 34 4 46l8-3" />
       <path d="M28 34l8 12-8-3" />
-      <path d="M16 44h8l-4 8Z" fill={color} stroke="none" opacity="0.5" />
     </svg>
   );
 }
