@@ -66,6 +66,7 @@ export default function App() {
   }
 
   function toggleTheme() {
+    if (themeTransitionMode) return; // debounce: ignore clicks mid-flight, state machine can't be interrupted safely yet
     setThemeName((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       persistThemeName(next);
