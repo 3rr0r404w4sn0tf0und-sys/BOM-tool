@@ -4,7 +4,6 @@ import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
-import SkyBackground from "./SkyBackground.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
@@ -36,7 +35,6 @@ export default function App() {
   const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
-  const [themeTransitionMode, setThemeTransitionMode] = useState(null); // null | "blastoff" | "landing"
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [justRegisteredEmail, setJustRegisteredEmail] = useState(null);
   const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
@@ -45,7 +43,6 @@ export default function App() {
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
   const [bomListLoading, setBomListLoading] = useState(false);
   const [openingBomId, setOpeningBomId] = useState(null);
-  const mainContentRef = useRef(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
@@ -67,13 +64,9 @@ export default function App() {
   }
 
   function toggleTheme() {
-    if (themeTransitionMode) return; // debounce: ignore clicks mid-flight, state machine can't be interrupted safely yet
     setThemeName((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       persistThemeName(next);
-      // Overlay covers the swap below (blastoff = heading INTO dark,
-      // landing = heading INTO light) then fades itself out once painted.
-      setThemeTransitionMode(next === "dark" ? "blastoff" : "landing");
       return next;
     });
   }
@@ -381,7 +374,7 @@ export default function App() {
     minHeight: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: "transparent", // SkyBackground (fixed, behind everything) paints the real bg now
+    background: theme.bg,
     fontFamily: "sans-serif",
     position: "relative",
     zIndex: 1,
@@ -389,19 +382,14 @@ export default function App() {
 
   if (authChecking) {
     return (
-      <>
-        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
-        <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
-          <WakingUp theme={theme} />
-        </div>
-      </>
+      <div style={{ ...pageShell, alignItems: "center", justifyContent: "center" }}>
+        <WakingUp theme={theme} />
+      </div>
     );
   }
 
   if (justRegisteredEmail) {
     return (
-      <>
-        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
         <div style={pageShell}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div
@@ -443,14 +431,12 @@ export default function App() {
         <Footer theme={theme} onPrivacyClick={() => setShowPrivacy(true)} />
         {showPrivacy && <PrivacyModal theme={theme} onClose={() => setShowPrivacy(false)} />}
         </div>
-      </>
     );
   }
 
   if (!token) {
     return (
       <div style={pageShell}>
-        <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} />
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px" }}>
           <div style={{ width: 340, maxWidth: "100%", position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -589,10 +575,8 @@ export default function App() {
 
   return (
     <div style={pageShell}>
-      <SkyBackground themeName={themeName} transitionMode={themeTransitionMode} onTransitionDone={() => setThemeTransitionMode(null)} contentRef={mainContentRef} />
       <div
-        ref={mainContentRef}
-        style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box", willChange: "transform" }}
+        style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
         onContextMenu={(e) => {
           // Blank-canvas right click -> "Add table". Clicks inside a
           // SectionTable stop propagation and show their own menu instead.
