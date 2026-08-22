@@ -32,6 +32,27 @@ USER_AGENTS = [
 
 PRICE_RE = re.compile(r"[\d,]+\.\d{2}|[\d,]+")
 
+# Distributor sites (Mouser, Digi-Key, etc.) commonly render a plain price
+# break table -- "Qty. | Unit Price | Ext. Price" -- with no itemprop,
+# JSON-LD, or Open Graph price tag anywhere on the page. Scoped to tables
+# that actually look like a pricing table so it doesn't grab a stray "$"
+# from somewhere unrelated (e.g. a tariff disclaimer sentence).
+PRICING_TABLE_KEYWORDS = ("unit price", "ext. price", "ext price", "price break")
+
+
+def _find_pricing_table_price(soup):
+    for table in soup.find_all("table"):
+        table_text = table.get_text(" ", strip=True).lower()
+        if not any(k in table_text for k in PRICING_TABLE_KEYWORDS):
+            continue
+        for cell in table.find_all(["td", "th"]):
+            text = cell.get_text(strip=True)
+            if text.startswith("$"):
+                price = _clean_price(text)
+                if price:
+                    return price
+    return None
+
 
 def _clean_price(raw):
     if raw is None:
@@ -84,6 +105,10 @@ def try_generic_scrape(url: str) -> dict:
         if price:
             return {"found": True, "price": price, "source": "itemprop"}
 
+    table_price = _find_pricing_table_price(soup)
+    if table_price:
+        return {"found": True, "price": table_price, "source": "pricing_table"}
+
     return {"found": False, "error": "No price found via generic scrape"}
 
 
@@ -134,6 +159,10 @@ def try_playwright_scrape(url: str) -> dict:
                 price = _clean_price(price_tag.get("content") or price_tag.text)
                 if price:
                     return {"found": True, "price": price, "source": "playwright_itemprop"}
+
+            table_price = _find_pricing_table_price(soup)
+            if table_price:
+                return {"found": True, "price": table_price, "source": "playwright_pricing_table"}
 
             return {"found": False, "error": "No price found even after JS render"}
         except Exception as e:
