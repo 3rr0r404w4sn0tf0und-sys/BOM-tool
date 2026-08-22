@@ -1,5 +1,23 @@
 import * as XLSX from "xlsx";
 
+// SheetJS's cell.l.Target returns the hyperlink target exactly as it
+// appears in the XLSX file's internal relationships XML -- which means
+// a literal "&" in the URL is still XML-escaped as "&amp;" (valid XML,
+// but a broken URL once you try to actually request it -- e.g. Mouser
+// links with a second query param like "...&mgh=1" come back as
+// "...&amp;mgh=1" and fail at the HTTP layer). Decode the handful of
+// XML entities that can legally appear in an attribute value before
+// this URL ever reaches a scraper.
+function decodeXmlEntities(str) {
+  if (!str) return str;
+  return str
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
 // Parses an uploaded spreadsheet (.xlsx, .xls, .csv) into BOM sections/items,
 // following the fixed column layout the user's BOM sheets use:
 //   Column A: item link (cell hyperlink) — its visible text is ignored as a
@@ -50,7 +68,7 @@ export function parseSheet(buffer) {
       sections.push(current);
     }
 
-    const url = aCell && aCell.l && aCell.l.Target ? aCell.l.Target : null;
+    const url = aCell && aCell.l && aCell.l.Target ? decodeXmlEntities(aCell.l.Target) : null;
     const name = bText || aText || url || "Untitled item";
     const qtyNum = hasQty ? Number(qtyRaw) : 1;
 
