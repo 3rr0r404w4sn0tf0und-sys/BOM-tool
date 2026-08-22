@@ -12,6 +12,14 @@ import sys
 import requests
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape
+from apify_generic_scrape import try_apify_generic_scrape
+
+# Domains confirmed to block/starve a plain self-hosted headless
+# Playwright browser (WAF fingerprinting or async-content withholding)
+# -- these route through Apify's proxy infra first. Add to this list
+# as new domains are confirmed to have the same problem; don't add
+# speculatively, since each Apify call costs credits.
+APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 
 
 def main():
@@ -29,6 +37,14 @@ def main():
             result = try_apify_scrape(url)
             if not result.get("found"):
                 print(f"Apify failed ({result.get('error')}), trying Playwright directly")
+                result = get_price(url)
+        elif any(domain in url for domain in APIFY_GENERIC_DOMAINS):
+            # Known WAF-blocked distributor sites: try Apify's generic
+            # Puppeteer Scraper (runs from Apify's proxy IPs, not the
+            # Actions runner's) first, fall back to plain Playwright.
+            result = try_apify_generic_scrape(url)
+            if not result.get("found"):
+                print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright directly")
                 result = get_price(url)
         else:
             result = get_price(url)

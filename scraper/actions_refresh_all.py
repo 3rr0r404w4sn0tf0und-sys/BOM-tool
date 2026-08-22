@@ -13,6 +13,22 @@ import sys
 import psycopg2
 import psycopg2.extras
 from scrape_logic import get_price
+from apify_generic_scrape import try_apify_generic_scrape
+
+# Keep in sync with actions_scrape_one.py -- domains confirmed to block/
+# starve a plain self-hosted headless Playwright browser, routed through
+# Apify's proxy infra first.
+APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
+
+
+def scrape(url):
+    if any(domain in url for domain in APIFY_GENERIC_DOMAINS):
+        result = try_apify_generic_scrape(url)
+        if not result.get("found"):
+            print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright directly")
+            result = get_price(url)
+        return result
+    return get_price(url)
 
 
 def main():
@@ -32,7 +48,7 @@ def main():
     for row in rows:
         item_id, url = row["id"], row["url"]
         try:
-            result = get_price(url)
+            result = scrape(url)
 
             if result.get("found"):
                 cur.execute(

@@ -20,14 +20,24 @@ import psycopg2
 import psycopg2.extras
 from scrape_logic import get_price, try_playwright_scrape
 from apify_scrape import try_apify_scrape
+from apify_generic_scrape import try_apify_generic_scrape
 
 # Pace Playwright fallback attempts so we don't hammer Amazon back to back.
 DELAY_MIN = 5
 DELAY_MAX = 15
 
+# Keep in sync with actions_scrape_one.py / actions_refresh_all.py --
+# domains confirmed to block/starve a plain self-hosted headless
+# Playwright browser, routed through Apify's proxy infra first.
+APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
+
 
 def is_amazon(url):
     return "amazon." in url
+
+
+def is_apify_generic(url):
+    return any(domain in url for domain in APIFY_GENERIC_DOMAINS)
 
 
 def main():
@@ -68,6 +78,12 @@ def main():
                 result = try_apify_scrape(url)
                 if not result.get("found"):
                     print(f"Apify failed ({result.get('error')}), trying Playwright")
+                    time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
+                    result = try_playwright_scrape(url)
+            elif is_apify_generic(url):
+                result = try_apify_generic_scrape(url)
+                if not result.get("found"):
+                    print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright")
                     time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
                     result = try_playwright_scrape(url)
             else:
