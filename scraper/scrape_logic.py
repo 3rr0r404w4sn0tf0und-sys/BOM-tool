@@ -39,11 +39,32 @@ PRICE_RE = re.compile(r"[\d,]+\.\d{2}|[\d,]+")
 # from somewhere unrelated (e.g. a tariff disclaimer sentence).
 PRICING_TABLE_KEYWORDS = ("unit price", "ext. price", "ext price", "price break")
 
+# Some distributors (Arrow, e.g.) use a pricing table with a bare "Price"
+# header instead of "Unit Price"/"Ext. Price"/"Price Break". Bare "price"
+# is a much broader match (could snag an unrelated "price history" or
+# disclaimer table), so it's only tried as a fallback -- after the more
+# specific keywords above have already failed to match anything.
+PRICING_TABLE_FALLBACK_KEYWORDS = ("price",)
+
+
+def _table_has_price_headers(table, keywords):
+    """Only match against header cells (th) or the first row, not the
+    whole table body -- avoids false positives from a stray '$' or the
+    word 'price' showing up deep in an unrelated data row."""
+    header_cells = table.find_all("th")
+    if not header_cells:
+        first_row = table.find("tr")
+        header_cells = first_row.find_all(["td", "th"]) if first_row else []
+    header_text = " ".join(c.get_text(" ", strip=True) for c in header_cells).lower()
+    return any(k in header_text for k in keywords)
+
 
 def _find_pricing_table_price(soup):
-    for table in soup.find_all("table"):
-        table_text = table.get_text(" ", strip=True).lower()
-        if not any(k in table_text for k in PRICING_TABLE_KEYWORDS):
+    tables = soup.find_all("table")
+
+    # Pass 1: specific keywords (Mouser/Digi-Key style)
+    for table in tables:
+        if not _table_has_price_headers(table, PRICING_TABLE_KEYWORDS):
             continue
         for cell in table.find_all(["td", "th"]):
             text = cell.get_text(strip=True)
@@ -51,6 +72,19 @@ def _find_pricing_table_price(soup):
                 price = _clean_price(text)
                 if price:
                     return price
+
+    # Pass 2: fallback to bare "Price" header (Arrow style), only if
+    # pass 1 found nothing at all.
+    for table in tables:
+        if not _table_has_price_headers(table, PRICING_TABLE_FALLBACK_KEYWORDS):
+            continue
+        for cell in table.find_all(["td", "th"]):
+            text = cell.get_text(strip=True)
+            if text.startswith("$"):
+                price = _clean_price(text)
+                if price:
+                    return price
+
     return None
 
 
@@ -129,9 +163,8 @@ def try_playwright_scrape(url: str) -> dict:
             if response and response.status in (404, 410):
                 return {"found": False, "error": "link_failed: page returned 404/410"}
 
-            page.wait_for_timeout(random.randint(2000, 5000) if is_amazon else random.randint(1000, 2000))
-
             if is_amazon:
+                page.wait_for_timeout(random.randint(2000, 5000))
                 selectors = [
                     "span.a-price span.a-offscreen",
                     "#priceblock_ourprice",
@@ -151,6 +184,32 @@ def try_playwright_scrape(url: str) -> dict:
                     return {"found": False, "error": "Blocked by Amazon CAPTCHA"}
 
                 return {"found": False, "error": "Amazon page loaded but no price selector matched"}
+
+            # Non-Amazon: many distributor sites (Mouser, etc.) populate
+            # their pricing table via an async call *after* the initial
+            # page load, so a blind fixed-length wait races that fetch.
+            # Wait for something that looks like a price to actually
+            # exist in the DOM -- either an itemprop tag or a table cell
+            # starting with "$" -- falling back to a short flat wait if
+            # neither shows up in time (still lets other extraction
+            # paths further down get a chance).
+            try:
+                page.wait_for_function(
+                    """() => {
+                        if (document.querySelector('[itemprop="price"]')) return true;
+                        const cells = document.querySelectorAll('table td, table th');
+                        for (const c of cells) {
+                            if (c.textContent.trim().startsWith('$')) return true;
+                        }
+                        return false;
+                    }""",
+                    timeout=8000,
+                )
+            except Exception:
+                # Nothing showed up in time -- fall back to a short flat
+                # wait so slower-but-not-broken pages still get one last
+                # chance before extraction runs on whatever loaded.
+                page.wait_for_timeout(random.randint(1000, 2000))
 
             html = page.content()
             soup = BeautifulSoup(html, "html.parser")
