@@ -132,13 +132,19 @@ function RefreshButton({ item, theme, token, onRefresh }) {
 }
 
 function CostCell({ item, theme, token, onResolved }) {
+  const lineTotal = Number(item.unit_price) * Number(item.qty ?? 1);
   if (item.status === "ok") {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
           <span style={{ fontSize: 13.5, color: theme.text, fontWeight: 600 }}>
-            ${Number(item.unit_price).toFixed(2)}
+            ${lineTotal.toFixed(2)}
           </span>
+          {Number(item.qty ?? 1) !== 1 && (
+            <span style={{ fontSize: 11, color: theme.muted }}>
+              ${Number(item.unit_price).toFixed(2)} × {item.qty}
+            </span>
+          )}
           {item.stale_price && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: theme.warnText }}>
               <IconWarning size={11} color={theme.warnText} /> stale

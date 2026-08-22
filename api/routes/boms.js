@@ -189,6 +189,75 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, 
   res.json({ sections: createdSections });
 });
 
+// POST /api/boms/:bomId/refresh-items
+// Bulk re-trigger scrapes for every item in this BOM that has a URL.
+// body: { filter: "amazon" | "non-amazon" | "all" } (defaults to "all")
+// Reuses the same per-item scrape-on-demand workflow as a single manual
+// refresh -- that workflow (actions_scrape_one.py) already branches on
+// Amazon vs non-Amazon internally, this endpoint just decides which rows
+// to fire it for.
+bomsRouter.post("/:bomId/refresh-items", async (req, res) => {
+  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
+    req.params.bomId,
+    req.userId,
+  ]);
+  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+
+  const filter = req.body?.filter || "all";
+  if (!["amazon", "non-amazon", "all"].includes(filter)) {
+    return res.status(400).json({ error: "filter must be 'amazon', 'non-amazon', or 'all'" });
+  }
+
+  let urlCondition = "";
+  if (filter === "amazon") urlCondition = "AND items.url ILIKE '%amazon.%'";
+  else if (filter === "non-amazon") urlCondition = "AND items.url NOT ILIKE '%amazon.%'";
+
+  // Mark everything that's about to be scraped as pending right away so
+  // the UI shows the "pending…" state immediately instead of waiting for
+  // the batch job to touch each row.
+  const pendingResult = await pool.query(
+    `UPDATE items SET status = 'pending'
+     FROM sections
+     WHERE items.section_id = sections.id
+       AND sections.bom_id = $1
+       AND items.url IS NOT NULL AND items.url != '' ${urlCondition}
+     RETURNING items.id`,
+    [req.params.bomId]
+  );
+
+  const ghRepo = process.env.GITHUB_REPO;
+  const ghToken = process.env.GITHUB_DISPATCH_TOKEN;
+  if (!ghRepo || !ghToken) {
+    console.error("GITHUB_REPO / GITHUB_DISPATCH_TOKEN not set, cannot trigger batch scrape");
+    return res.status(500).json({ error: "Scraper not configured on the server" });
+  }
+
+  try {
+    const resp = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event_type: "bom-batch-scrape-request",
+        client_payload: { bom_id: req.params.bomId, filter },
+      }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error("GitHub batch dispatch failed:", resp.status, text);
+      return res.status(500).json({ error: "Failed to start batch refresh job" });
+    }
+  } catch (e) {
+    console.error("Failed to trigger GitHub Actions batch scrape:", e);
+    return res.status(500).json({ error: "Failed to start batch refresh job" });
+  }
+
+  res.json({ triggered: pendingResult.rows.length, filter });
+});
+
 // --- Items ---
 
 bomsRouter.post("/sections/:sectionId/items", async (req, res) => {

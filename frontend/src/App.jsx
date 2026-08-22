@@ -6,7 +6,7 @@ import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload } from "./Icons.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconRefresh } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -49,6 +49,9 @@ export default function App() {
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
   const sheetFileInputRef = useRef(null);
+  const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "non-amazon" | "all"
+  const [taxRateEditing, setTaxRateEditing] = useState(false);
+  const [taxRateDraft, setTaxRateDraft] = useState("");
   const theme = getTheme(themeName);
 
   function persistToken(t) {
@@ -320,6 +323,35 @@ export default function App() {
     setOpeningBomId(null);
   }
 
+  // Quiet refetch used by the auto-poll below -- same as loadBom but
+  // skips the openingBomId flicker since this runs silently in the
+  // background, not from the user clicking to open a BOM.
+  async function pollBomQuietly(id) {
+    try {
+      const res = await fetch(`${API_URL}/api/boms/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setBom(await res.json());
+    } catch {
+      // network hiccup mid-poll -- just try again on the next tick
+    }
+  }
+
+  // Auto-refresh: as long as the open BOM has any item still "pending"
+  // (freshly added, or mid-scrape from a manual/bulk refresh), keep
+  // quietly re-fetching every few seconds so prices pop in on their own
+  // instead of needing a manual page reload. Stops itself once nothing
+  // is pending anymore.
+  useEffect(() => {
+    if (!bom) return;
+    const hasPending = bom.sections?.some((s) =>
+      s.items.some((i) => i.status === "pending" || !i.status)
+    );
+    if (!hasPending) return;
+    const t = setTimeout(() => pollBomQuietly(bom.id), 4000);
+    return () => clearTimeout(t);
+  }, [bom]);
+
   async function loadBomList() {
     setBomListLoading(true);
     try {
@@ -350,6 +382,20 @@ export default function App() {
     loadBom(bom.id);
   }
 
+  async function saveTaxRate() {
+    setTaxRateEditing(false);
+    const pct = parseFloat(taxRateDraft);
+    if (!Number.isFinite(pct) || pct < 0) return;
+    const rate = Math.round((pct / 100) * 10000) / 10000; // matches NUMERIC(6,4)
+    if (rate === Number(bom.tax_rate)) return;
+    await fetch(`${API_URL}/api/boms/${bom.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tax_rate: rate }),
+    });
+    loadBom(bom.id);
+  }
+
   async function deleteBom(id) {
     await fetch(`${API_URL}/api/boms/${id}`, {
       method: "DELETE",
@@ -374,6 +420,27 @@ export default function App() {
   // after whatever's already in the BOM.
   function triggerSheetUpload() {
     sheetFileInputRef.current?.click();
+  }
+
+  async function refreshItems(filter) {
+    if (!bom || refreshingFilter) return;
+    setRefreshingFilter(filter);
+    try {
+      const res = await fetch(`${API_URL}/api/boms/${bom.id}/refresh-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ filter }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Refresh failed");
+      }
+      await loadBom(bom.id);
+    } catch (err) {
+      setSheetImportError(err.message || "Refresh failed");
+    } finally {
+      setRefreshingFilter(null);
+    }
   }
 
   async function importSheet(e) {
@@ -824,6 +891,45 @@ export default function App() {
                   style={{ display: "none" }}
                 />
                 <button
+                  onClick={() => refreshItems("non-amazon")}
+                  disabled={!!refreshingFilter}
+                  title="Re-scrape every non-Amazon item's price"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
+                  }}
+                >
+                  <IconRefresh size={13} /> {refreshingFilter === "non-amazon" ? "Refreshing…" : "Refresh Non-Amazon"}
+                </button>
+                <button
+                  onClick={() => refreshItems("amazon")}
+                  disabled={!!refreshingFilter}
+                  title="Re-scrape every Amazon item's price"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
+                  }}
+                >
+                  <IconRefresh size={13} /> {refreshingFilter === "amazon" ? "Refreshing…" : "Refresh Amazon"}
+                </button>
+                <button
+                  onClick={() => refreshItems("all")}
+                  disabled={!!refreshingFilter}
+                  title="Re-scrape every item's price"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
+                  }}
+                >
+                  <IconRefresh size={13} /> {refreshingFilter === "all" ? "Refreshing…" : "Refresh All"}
+                </button>
+                <button
                   onClick={triggerSheetUpload}
                   disabled={sheetImporting}
                   title="Import a .xlsx/.xls/.csv (link in col A, qty in col C)"
@@ -910,7 +1016,48 @@ export default function App() {
                 <span>${bom.totals.subtotal.toFixed(2)}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13.5, color: theme.subtleText }}>
-                <span>Tax</span>
+                {taxRateEditing ? (
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span>Tax</span>
+                    <input
+                      autoFocus
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={taxRateDraft}
+                      onChange={(e) => setTaxRateDraft(e.target.value)}
+                      onBlur={saveTaxRate}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Escape") setTaxRateEditing(false);
+                      }}
+                      style={{
+                        width: 54, boxSizing: "border-box", padding: "2px 5px", fontSize: 12.5,
+                        border: `1px solid ${theme.accent}`, borderRadius: 5,
+                        background: theme.cardBg, color: theme.text, textAlign: "right",
+                      }}
+                    />
+                    <span>%</span>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setTaxRateDraft(String(Math.round(Number(bom.tax_rate) * 10000) / 100));
+                      setTaxRateEditing(true);
+                    }}
+                    title="Click to set tax rate"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 4,
+                      border: "none", background: "none", padding: "2px 4px", margin: "-2px -4px",
+                      borderRadius: 5, cursor: "pointer", color: theme.subtleText, font: "inherit",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = theme.rowBorder)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                  >
+                    Tax ({(Number(bom.tax_rate) * 100).toFixed(2)}%)
+                    <IconPencil size={10} color={theme.muted} />
+                  </button>
+                )}
                 <span>${bom.totals.tax.toFixed(2)}</span>
               </span>
               <span style={{ height: 1, background: theme.border, margin: "4px 0" }} />

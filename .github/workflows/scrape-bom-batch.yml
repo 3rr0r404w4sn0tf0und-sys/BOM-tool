@@ -1,0 +1,30 @@
+name: Scrape BOM batch on demand
+
+on:
+  repository_dispatch:
+    types: [bom-batch-scrape-request]
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # one run covers a whole BOM's worth of items
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 playwright psycopg2-binary
+          playwright install --with-deps chromium
+
+      - name: Scrape every matching item in this BOM
+        env:
+          BOM_ID: ${{ github.event.client_payload.bom_id }}
+          FILTER: ${{ github.event.client_payload.filter }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
+        run: python scraper/actions_refresh_bom_batch.py
