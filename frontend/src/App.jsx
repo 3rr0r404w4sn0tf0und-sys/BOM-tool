@@ -6,7 +6,7 @@ import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug } from "./Icons.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -46,6 +46,9 @@ export default function App() {
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
+  const [sheetImporting, setSheetImporting] = useState(false);
+  const [sheetImportError, setSheetImportError] = useState(null);
+  const sheetFileInputRef = useRef(null);
   const theme = getTheme(themeName);
 
   function persistToken(t) {
@@ -363,6 +366,41 @@ export default function App() {
       body: JSON.stringify({ title: "New Table", sort_order: bom.sections.length }),
     });
     loadBom(bom.id);
+  }
+
+  // Upload a .xlsx/.xls/.csv following the fixed column layout (link in A,
+  // optional name override in B, qty in C, D always ignored) — each
+  // section-header row in the file becomes a new table here, appended
+  // after whatever's already in the BOM.
+  function triggerSheetUpload() {
+    sheetFileInputRef.current?.click();
+  }
+
+  async function importSheet(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file || !bom) return;
+
+    setSheetImporting(true);
+    setSheetImportError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API_URL}/api/boms/${bom.id}/import-sheet`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Import failed");
+      }
+      await loadBom(bom.id);
+    } catch (err) {
+      setSheetImportError(err.message || "Import failed");
+    } finally {
+      setSheetImporting(false);
+    }
   }
 
   // Load the BOM list once we know who's logged in and haven't opened a BOM.
@@ -778,6 +816,26 @@ export default function App() {
                 >
                   <IconPlug size={13} /> API
                 </button>
+                <input
+                  ref={sheetFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={importSheet}
+                  style={{ display: "none" }}
+                />
+                <button
+                  onClick={triggerSheetUpload}
+                  disabled={sheetImporting}
+                  title="Import a .xlsx/.xls/.csv (link in col A, qty in col C)"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                    cursor: sheetImporting ? "default" : "pointer", opacity: sheetImporting ? 0.6 : 1,
+                  }}
+                >
+                  <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import Sheet"}
+                </button>
                 <button
                   onClick={addTable}
                   style={{
@@ -790,6 +848,13 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {sheetImportError && (
+              <p style={{ color: theme.errText, background: theme.errBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
+                <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.errText} /></span>
+                <span>{sheetImportError}</span>
+              </p>
+            )}
 
             {showApiModal && <ApiModal bom={bom} theme={theme} onClose={() => setShowApiModal(false)} />}
 

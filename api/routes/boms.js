@@ -1,12 +1,21 @@
 import express from "express";
 import crypto from "crypto";
 import fetch from "node-fetch";
+import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { calculateTotals } from "../db/totals.js";
+import { parseSheet } from "../lib/sheetImport.js";
 
 export const bomsRouter = express.Router();
 bomsRouter.use(requireAuth);
+
+// Sheet imports (.xlsx / .xls / .csv) — kept small, this isn't for
+// uploading giant spreadsheets, just a BOM a few hundred rows long.
+const sheetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // --- BOMs ---
 
@@ -114,6 +123,70 @@ bomsRouter.patch("/sections/:sectionId", async (req, res) => {
 bomsRouter.delete("/sections/:sectionId", async (req, res) => {
   await pool.query("DELETE FROM sections WHERE id = $1", [req.params.sectionId]);
   res.status(204).send();
+});
+
+// POST /api/boms/:bomId/import-sheet
+// Uploads a .xlsx/.xls/.csv following the fixed column layout (A: link,
+// B: optional name override, C: qty, D: always ignored) and creates a new
+// section per section-header row found, with its items underneath. Prices
+// are left untouched here -- items with a URL get a scrape kicked off the
+// same way manually-added items do, so price shows up shortly after.
+bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, res) => {
+  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
+    req.params.bomId,
+    req.userId,
+  ]);
+  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  let parsed;
+  try {
+    parsed = parseSheet(req.file.buffer);
+  } catch (e) {
+    console.error("Failed to parse uploaded sheet:", e);
+    return res.status(400).json({ error: "Could not parse file. Supported: .xlsx, .xls, .csv" });
+  }
+
+  if (!parsed.sections.length) {
+    return res.status(400).json({ error: "No sections or items found in that file" });
+  }
+
+  const existingOrder = await pool.query(
+    "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1",
+    [req.params.bomId]
+  );
+  let sortOrder = existingOrder.rows[0].max_order + 1;
+
+  const createdSections = [];
+  for (const section of parsed.sections) {
+    const sectionResult = await pool.query(
+      `INSERT INTO sections (bom_id, title, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+      [req.params.bomId, section.title, sortOrder++]
+    );
+    const newSection = sectionResult.rows[0];
+
+    const createdItems = [];
+    let itemSortOrder = 0;
+    for (const item of section.items) {
+      const itemResult = await pool.query(
+        `INSERT INTO items (section_id, name, url, qty, sort_order, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *`,
+        [newSection.id, item.name, item.url, item.qty, itemSortOrder++]
+      );
+      const newItem = itemResult.rows[0];
+      createdItems.push(newItem);
+      if (newItem.url) {
+        triggerScrape(newItem.id, newItem.url).catch((e) =>
+          console.error("scrape trigger failed", e)
+        );
+      }
+    }
+    createdSections.push({ ...newSection, items: createdItems });
+  }
+
+  await pool.query("UPDATE boms SET updated_at = now() WHERE id = $1", [req.params.bomId]);
+
+  res.json({ sections: createdSections });
 });
 
 // --- Items ---
