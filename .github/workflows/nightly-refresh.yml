@@ -24,4 +24,6 @@ jobs:
       - name: Refresh all item prices
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
         run: python scraper/actions_refresh_all.py
