@@ -1,0 +1,29 @@
+name: Amazon price refresh (biweekly)
+
+on:
+  schedule:
+    - cron: "0 0 1,15 * *"   # Midnight UTC on the 1st and 15th of each month (~every 2 weeks)
+  workflow_dispatch: {}
+
+jobs:
+  refresh-amazon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # this can run long with many items + delays
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 playwright psycopg2-binary
+          playwright install --with-deps chromium
+
+      - name: Refresh Amazon item prices
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
+        run: python scraper/actions_refresh_amazon_weekly.py
