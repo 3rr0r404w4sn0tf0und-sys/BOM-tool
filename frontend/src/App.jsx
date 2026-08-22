@@ -20,6 +20,93 @@ const TOKEN_STORAGE_KEY = "bom-tool-token";
 // the UI (rich text rows, emoji section titles, drag to reorder, etc.)
 // can be built against a known-working backend.
 
+// Consolidated "Refresh" dropdown -- one button instead of three, so the
+// BOM title always keeps its room in the toolbar. Smooth scale/opacity
+// open, closes on outside click, Escape, or after a selection.
+function RefreshMenu({ theme, refreshingFilter, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const busy = !!refreshingFilter;
+
+  const options = [
+    { key: "non-amazon", label: "Non-Amazon items" },
+    { key: "amazon", label: "Amazon items" },
+    { key: "all", label: "Everything" },
+  ];
+  const busyLabel = options.find((o) => o.key === refreshingFilter)?.label;
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={busy}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+          background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+          cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+        }}
+      >
+        <IconRefresh size={13} />
+        {busy ? `Refreshing ${busyLabel}…` : "Refresh"}
+        <span
+          style={{
+            fontSize: 9, marginLeft: -1, transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 160ms ease",
+          }}
+        >
+          ▾
+        </span>
+      </button>
+
+      <div
+        style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20,
+          background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10,
+          boxShadow: "0 10px 28px rgba(0,0,0,0.18)", minWidth: 180, overflow: "hidden",
+          transformOrigin: "top left",
+          opacity: open ? 1 : 0,
+          transform: open ? "scale(1) translateY(0)" : "scale(0.96) translateY(-4px)",
+          pointerEvents: open ? "auto" : "none",
+          transition: "opacity 150ms ease, transform 150ms ease",
+        }}
+      >
+        {options.map((o) => (
+          <button
+            key={o.key}
+            onClick={() => { setOpen(false); onSelect(o.key); }}
+            disabled={busy}
+            style={{
+              display: "block", width: "100%", textAlign: "left", padding: "10px 13px",
+              border: "none", background: "none", color: theme.text, fontSize: 13, fontWeight: 500,
+              cursor: busy ? "default" : "pointer",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = theme.rowBorder)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
@@ -48,6 +135,7 @@ export default function App() {
   const [showApiModal, setShowApiModal] = useState(false);
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
+  const [sheetImportJustSucceeded, setSheetImportJustSucceeded] = useState(false);
   const sheetFileInputRef = useRef(null);
   const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "non-amazon" | "all"
   const [taxRateEditing, setTaxRateEditing] = useState(false);
@@ -316,6 +404,7 @@ export default function App() {
 
   async function loadBom(id) {
     setOpeningBomId(id);
+    setSheetImportJustSucceeded(false);
     const res = await fetch(`${API_URL}/api/boms/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -425,6 +514,7 @@ export default function App() {
   async function refreshItems(filter) {
     if (!bom || refreshingFilter) return;
     setRefreshingFilter(filter);
+    setSheetImportJustSucceeded(false);
     try {
       const res = await fetch(`${API_URL}/api/boms/${bom.id}/refresh-items`, {
         method: "POST",
@@ -463,6 +553,7 @@ export default function App() {
         throw new Error(data.error || "Import failed");
       }
       await loadBom(bom.id);
+      setSheetImportJustSucceeded(true);
     } catch (err) {
       setSheetImportError(err.message || "Import failed");
     } finally {
@@ -830,135 +921,102 @@ export default function App() {
 
         {bom && (
           <div key={`bom-detail-${bom.id}`} className="bom-view-enter">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <button
-                  onClick={exitBom}
-                  title="Back to your BOMs"
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 30, height: 30, flexShrink: 0, border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, cursor: "pointer",
-                  }}
-                >
-                  <IconArrowLeft size={14} color={theme.text} />
-                </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <button
+                onClick={exitBom}
+                title="Back to your BOMs"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 30, height: 30, flexShrink: 0, border: `1px solid ${theme.border}`, borderRadius: 8,
+                  background: theme.cardBg, color: theme.text, cursor: "pointer",
+                }}
+              >
+                <IconArrowLeft size={14} color={theme.text} />
+              </button>
 
-                {titleEditing ? (
-                  <input
-                    autoFocus
-                    value={titleDraft}
-                    onChange={(e) => setTitleDraft(e.target.value)}
-                    onBlur={renameBom}
-                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                    style={{
-                      fontSize: 18, fontWeight: 700, border: `1px solid ${theme.accent}`, borderRadius: 6,
-                      padding: "4px 8px", background: theme.cardBg, color: theme.text, minWidth: 0,
-                    }}
-                  />
-                ) : (
-                  <button
-                    onClick={() => { setTitleDraft(bom.title); setTitleEditing(true); }}
-                    title="Rename BOM"
-                    style={{
-                      display: "flex", alignItems: "center", gap: 6, border: "none", background: "none", cursor: "pointer",
-                      fontSize: 18, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6, minWidth: 0,
-                    }}
-                  >
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bom.title}</span>
-                    <IconPencil size={12} color={theme.muted} />
-                  </button>
-                )}
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <button
-                  onClick={() => setShowApiModal(true)}
-                  title="API access"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                  }}
-                >
-                  <IconPlug size={13} /> API
-                </button>
+              {titleEditing ? (
                 <input
-                  ref={sheetFileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={importSheet}
-                  style={{ display: "none" }}
+                  autoFocus
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={renameBom}
+                  onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  style={{
+                    fontSize: 18, fontWeight: 700, border: `1px solid ${theme.accent}`, borderRadius: 6,
+                    padding: "4px 8px", background: theme.cardBg, color: theme.text, minWidth: 0, flex: 1,
+                  }}
                 />
+              ) : (
                 <button
-                  onClick={() => refreshItems("non-amazon")}
-                  disabled={!!refreshingFilter}
-                  title="Re-scrape every non-Amazon item's price"
+                  onClick={() => { setTitleDraft(bom.title); setTitleEditing(true); }}
+                  title="Rename BOM"
                   style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
-                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
+                    display: "flex", alignItems: "center", gap: 6, border: "none", background: "none", cursor: "pointer",
+                    fontSize: 18, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6, minWidth: 0,
                   }}
                 >
-                  <IconRefresh size={13} /> {refreshingFilter === "non-amazon" ? "Refreshing…" : "Refresh Non-Amazon"}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bom.title}</span>
+                  <IconPencil size={12} color={theme.muted} />
                 </button>
-                <button
-                  onClick={() => refreshItems("amazon")}
-                  disabled={!!refreshingFilter}
-                  title="Re-scrape every Amazon item's price"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
-                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
-                  }}
-                >
-                  <IconRefresh size={13} /> {refreshingFilter === "amazon" ? "Refreshing…" : "Refresh Amazon"}
-                </button>
-                <button
-                  onClick={() => refreshItems("all")}
-                  disabled={!!refreshingFilter}
-                  title="Re-scrape every item's price"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
-                    cursor: refreshingFilter ? "default" : "pointer", opacity: refreshingFilter ? 0.6 : 1,
-                  }}
-                >
-                  <IconRefresh size={13} /> {refreshingFilter === "all" ? "Refreshing…" : "Refresh All"}
-                </button>
-                <button
-                  onClick={triggerSheetUpload}
-                  disabled={sheetImporting}
-                  title="Import a .xlsx/.xls/.csv (link in col A, qty in col C)"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
-                    cursor: sheetImporting ? "default" : "pointer", opacity: sheetImporting ? 0.6 : 1,
-                  }}
-                >
-                  <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import Sheet"}
-                </button>
-                <button
-                  onClick={addTable}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                  }}
-                >
-                  <IconPlus size={13} /> Add table
-                </button>
-              </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <button
+                onClick={() => setShowApiModal(true)}
+                title="API access"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                <IconPlug size={13} /> API
+              </button>
+              <input
+                ref={sheetFileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={importSheet}
+                style={{ display: "none" }}
+              />
+              <RefreshMenu theme={theme} refreshingFilter={refreshingFilter} onSelect={refreshItems} />
+              <button
+                onClick={triggerSheetUpload}
+                disabled={sheetImporting}
+                title="Import a .xlsx/.xls/.csv (link in col A, qty in col C)"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                  cursor: sheetImporting ? "default" : "pointer", opacity: sheetImporting ? 0.6 : 1,
+                }}
+              >
+                <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import Sheet"}
+              </button>
+              <button
+                onClick={addTable}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                <IconPlus size={13} /> Add table
+              </button>
             </div>
 
             {sheetImportError && (
               <p style={{ color: theme.errText, background: theme.errBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
                 <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.errText} /></span>
                 <span>{sheetImportError}</span>
+              </p>
+            )}
+
+            {sheetImportJustSucceeded && (
+              <p style={{ color: theme.subtleText, background: theme.rowBorder, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
+                <span style={{ flexShrink: 0, marginTop: 2 }}><IconRefresh size={13} color={theme.subtleText} /></span>
+                <span>Sheet imported — hit Refresh above to fetch prices for the new items.</span>
               </p>
             )}
 
@@ -975,8 +1033,8 @@ export default function App() {
             )}
 
             {bom.totals.excludedCount > 0 && (
-              <p style={{ color: theme.warnText, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
-                <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.warnText} /></span>
+              <p style={{ color: theme.errText, background: theme.errBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
+                <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.errText} /></span>
                 <span>{bom.totals.excludedCount} item(s) excluded (link failed) — fix links to include in total.</span>
               </p>
             )}

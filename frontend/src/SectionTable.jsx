@@ -188,19 +188,12 @@ export default function SectionTable({ section, theme, token, onChange }) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(patch),
     });
+    // Pasting/changing a URL kicks off a scrape server-side. The item
+    // comes back from that PATCH as "pending", and App's global auto-poll
+    // effect (keyed off any pending item existing in the open BOM) takes
+    // over from here and keeps refetching until it resolves -- no local
+    // polling needed on top of that.
     onChange();
-
-    // Pasting/changing a URL kicks off a scrape server-side but the result
-    // comes back async -- poll a few times so the Cost cell updates itself
-    // instead of sitting at "pending" until someone hits manual refresh.
-    if (patch.url) {
-      let checks = 0;
-      const interval = setInterval(() => {
-        checks += 1;
-        onChange();
-        if (checks >= 8) clearInterval(interval);
-      }, 4000);
-    }
   }
 
   async function addRow() {
