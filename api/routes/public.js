@@ -1,6 +1,7 @@
 import express from "express";
 import { pool } from "../db/pool.js";
 import { calculateTotals } from "../db/totals.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const publicRouter = express.Router();
 
@@ -59,7 +60,7 @@ function priceLabel(item) {
 
 // GET /api/public/bom-clean
 // Full formatted BOM with sections + emoji titles, grouped rows, totals.
-publicRouter.get("/bom-clean", getBomByApiKey, async (req, res) => {
+publicRouter.get("/bom-clean", getBomByApiKey, asyncHandler(async (req, res) => {
   const { sections, items } = await loadFullBom(req.bom);
   const totals = calculateTotals(items, req.bom.tax_rate);
 
@@ -86,11 +87,11 @@ publicRouter.get("/bom-clean", getBomByApiKey, async (req, res) => {
     excluded_items: totals.excludedCount,
     ...footer(),
   });
-});
+}));
 
 // GET /api/public/bom-links
 // Flat list: Item, Price (as hyperlink to the original product URL)
-publicRouter.get("/bom-links", getBomByApiKey, async (req, res) => {
+publicRouter.get("/bom-links", getBomByApiKey, asyncHandler(async (req, res) => {
   const { items } = await loadFullBom(req.bom);
 
   const rows = items.map((i) => ({
@@ -104,4 +105,4 @@ publicRouter.get("/bom-links", getBomByApiKey, async (req, res) => {
     rows,
     ...footer(),
   });
-});
+}));

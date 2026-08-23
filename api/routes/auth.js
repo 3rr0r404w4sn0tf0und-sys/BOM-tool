@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const authRouter = express.Router();
 
@@ -37,7 +38,7 @@ async function issueVerificationEmail(userId, email) {
 
 // ---------- Email + password ----------
 
-authRouter.post("/register", async (req, res) => {
+authRouter.post("/register", asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "email and password required" });
@@ -72,9 +73,9 @@ authRouter.post("/register", async (req, res) => {
     console.error(e);
     res.status(500).json({ error: "Registration failed" });
   }
-});
+}));
 
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "email and password required" });
@@ -94,9 +95,9 @@ authRouter.post("/login", async (req, res) => {
     token: issueJwt(user.id),
     user: { id: user.id, email: user.email, email_verified: user.email_verified },
   });
-});
+}));
 
-authRouter.post("/verify", async (req, res) => {
+authRouter.post("/verify", asyncHandler(async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: "token required" });
 
@@ -116,9 +117,9 @@ authRouter.post("/verify", async (req, res) => {
     [user.id]
   );
   res.json({ verified: true });
-});
+}));
 
-authRouter.post("/resend-verification", async (req, res) => {
+authRouter.post("/resend-verification", asyncHandler(async (req, res) => {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace("Bearer ", "");
   let payload;
@@ -138,11 +139,11 @@ authRouter.post("/resend-verification", async (req, res) => {
 
   const emailResult = await issueVerificationEmail(user.id, user.email);
   res.json({ sent: emailResult.sent, error: emailResult.error });
-});
+}));
 
 // Used by the frontend after an OAuth redirect (which only returns a JWT
 // in the URL, not the full user object) to fetch the logged-in user.
-authRouter.get("/me", async (req, res) => {
+authRouter.get("/me", asyncHandler(async (req, res) => {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace("Bearer ", "");
   let payload;
@@ -158,7 +159,7 @@ authRouter.get("/me", async (req, res) => {
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json({ user });
-});
+}));
 
 // ---------- Shared OAuth helper ----------
 // Finds an existing user by (provider, providerId). If none, links to an
@@ -218,7 +219,7 @@ authRouter.get("/github/start", (req, res) => {
   res.redirect(`https://github.com/login/oauth/authorize?${params}`);
 });
 
-authRouter.get("/github/callback", async (req, res) => {
+authRouter.get("/github/callback", asyncHandler(async (req, res) => {
   const { code, error } = req.query;
   if (error || !code) return redirectWithError(res, "GitHub login was cancelled or failed");
 
@@ -270,4 +271,4 @@ authRouter.get("/github/callback", async (req, res) => {
     console.error("GitHub OAuth error:", e);
     redirectWithError(res, "GitHub login failed");
   }
-});
+}));

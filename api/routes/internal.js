@@ -1,5 +1,6 @@
 import express from "express";
 import { pool } from "../db/pool.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const internalRouter = express.Router();
 
@@ -16,7 +17,7 @@ function requireInternalSecret(req, res, next) {
 // POST /api/internal/captcha-screenshot
 // Called by the CAPTCHA-solve workflow when it hits a CAPTCHA wall.
 // Body: { item_id, screenshot_base64 }
-internalRouter.post("/captcha-screenshot", requireInternalSecret, async (req, res) => {
+internalRouter.post("/captcha-screenshot", requireInternalSecret, asyncHandler(async (req, res) => {
   const { item_id, screenshot_base64 } = req.body;
   if (!item_id || !screenshot_base64) {
     return res.status(400).json({ error: "item_id and screenshot_base64 required" });
@@ -33,12 +34,12 @@ internalRouter.post("/captcha-screenshot", requireInternalSecret, async (req, re
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   res.json({ ok: true });
-});
+}));
 
 // GET /api/internal/captcha-solution/:itemId
 // Polled repeatedly by the CAPTCHA-solve workflow while it waits for the
 // user to type the answer on the BOM page. 204 = not solved yet.
-internalRouter.get("/captcha-solution/:itemId", requireInternalSecret, async (req, res) => {
+internalRouter.get("/captcha-solution/:itemId", requireInternalSecret, asyncHandler(async (req, res) => {
   const result = await pool.query(
     "SELECT captcha_solution, captcha_status FROM items WHERE id = $1",
     [req.params.itemId]
@@ -50,13 +51,13 @@ internalRouter.get("/captcha-solution/:itemId", requireInternalSecret, async (re
     return res.json({ solved: true, solution: item.captcha_solution });
   }
   return res.status(204).send();
-});
+}));
 
 // POST /api/internal/captcha-timeout
 // Called by the workflow if it gives up waiting (user never solved it).
 // Falls back to keeping the old price with a stale flag, same as any
 // other Amazon scrape failure.
-internalRouter.post("/captcha-timeout", requireInternalSecret, async (req, res) => {
+internalRouter.post("/captcha-timeout", requireInternalSecret, asyncHandler(async (req, res) => {
   const { item_id } = req.body;
   await pool.query(
     `UPDATE items SET captcha_status = NULL, captcha_screenshot = NULL,
@@ -64,13 +65,13 @@ internalRouter.post("/captcha-timeout", requireInternalSecret, async (req, res) 
     [item_id]
   );
   res.json({ ok: true });
-});
+}));
 
 // POST /api/internal/scrape-result
 // Body: { item_id, found, price, source, error }
 // Called by the on-demand GitHub Actions workflow once a single-item
 // scrape finishes (see .github/workflows/scrape-on-demand.yml).
-internalRouter.post("/scrape-result", requireInternalSecret, async (req, res) => {
+internalRouter.post("/scrape-result", requireInternalSecret, asyncHandler(async (req, res) => {
   const { item_id, found, price, source, error } = req.body;
   if (!item_id) return res.status(400).json({ error: "item_id required" });
 
@@ -90,4 +91,4 @@ internalRouter.post("/scrape-result", requireInternalSecret, async (req, res) =>
 
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   res.json(result.rows[0]);
-});
+}));

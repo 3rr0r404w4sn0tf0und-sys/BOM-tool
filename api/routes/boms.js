@@ -6,6 +6,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { calculateTotals } from "../db/totals.js";
 import { parseSheet } from "../lib/sheetImport.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const bomsRouter = express.Router();
 bomsRouter.use(requireAuth);
@@ -19,7 +20,7 @@ const sheetUpload = multer({
 
 // --- BOMs ---
 
-bomsRouter.post("/", async (req, res) => {
+bomsRouter.post("/", asyncHandler(async (req, res) => {
   const { title } = req.body;
   const apiKey = crypto.randomBytes(24).toString("hex");
   const result = await pool.query(
@@ -27,18 +28,18 @@ bomsRouter.post("/", async (req, res) => {
     [req.userId, title || "Untitled BOM", apiKey]
   );
   res.json(result.rows[0]);
-});
+}));
 
-bomsRouter.get("/", async (req, res) => {
+bomsRouter.get("/", asyncHandler(async (req, res) => {
   const result = await pool.query(
     "SELECT * FROM boms WHERE user_id = $1 ORDER BY updated_at DESC",
     [req.userId]
   );
   res.json(result.rows);
-});
+}));
 
 // Full BOM with sections + items + calculated totals
-bomsRouter.get("/:id", async (req, res) => {
+bomsRouter.get("/:id", asyncHandler(async (req, res) => {
   const bomResult = await pool.query(
     "SELECT * FROM boms WHERE id = $1 AND user_id = $2",
     [req.params.id, req.userId]
@@ -70,9 +71,9 @@ bomsRouter.get("/:id", async (req, res) => {
   const totals = calculateTotals(allItems, bom.tax_rate);
 
   res.json({ ...bom, sections: sectionsWithItems, totals });
-});
+}));
 
-bomsRouter.patch("/:id", async (req, res) => {
+bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
   const { title, tax_rate } = req.body;
   const result = await pool.query(
     `UPDATE boms SET title = COALESCE($1, title), tax_rate = COALESCE($2, tax_rate),
@@ -81,19 +82,19 @@ bomsRouter.patch("/:id", async (req, res) => {
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
   res.json(result.rows[0]);
-});
+}));
 
-bomsRouter.delete("/:id", async (req, res) => {
+bomsRouter.delete("/:id", asyncHandler(async (req, res) => {
   await pool.query("DELETE FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.id,
     req.userId,
   ]);
   res.status(204).send();
-});
+}));
 
 // --- Sections ---
 
-bomsRouter.post("/:bomId/sections", async (req, res) => {
+bomsRouter.post("/:bomId/sections", asyncHandler(async (req, res) => {
   const { title, emoji, icon_url, sort_order } = req.body;
   // ownership check
   const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
@@ -120,11 +121,11 @@ bomsRouter.post("/:bomId/sections", async (req, res) => {
     [req.params.bomId, title || "Untitled Section", emoji, icon_url, order]
   );
   res.json(result.rows[0]);
-});
+}));
 
 // Bulk reorder -- called after a drag-and-drop of table cards. Body:
 // { orderedIds: [sectionId, sectionId, ...] } in the new desired order.
-bomsRouter.patch("/:bomId/sections/reorder", async (req, res) => {
+bomsRouter.patch("/:bomId/sections/reorder", asyncHandler(async (req, res) => {
   const { orderedIds } = req.body;
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: "orderedIds must be a non-empty array" });
@@ -152,9 +153,9 @@ bomsRouter.patch("/:bomId/sections/reorder", async (req, res) => {
     client.release();
   }
   res.status(204).send();
-});
+}));
 
-bomsRouter.patch("/sections/:sectionId", async (req, res) => {
+bomsRouter.patch("/sections/:sectionId", asyncHandler(async (req, res) => {
   const { title, emoji, icon_url, sort_order } = req.body;
   const result = await pool.query(
     `UPDATE sections SET title = COALESCE($1, title), emoji = COALESCE($2, emoji),
@@ -164,24 +165,24 @@ bomsRouter.patch("/sections/:sectionId", async (req, res) => {
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Section not found" });
   res.json(result.rows[0]);
-});
+}));
 
 // Soft delete -- keeps the row (and its items) around so "undo" can
 // bring it straight back by id instead of having to recreate everything
 // from scratch with a brand new id.
-bomsRouter.delete("/sections/:sectionId", async (req, res) => {
+bomsRouter.delete("/sections/:sectionId", asyncHandler(async (req, res) => {
   await pool.query("UPDATE sections SET deleted_at = now() WHERE id = $1", [req.params.sectionId]);
   res.status(204).send();
-});
+}));
 
-bomsRouter.post("/sections/:sectionId/restore", async (req, res) => {
+bomsRouter.post("/sections/:sectionId/restore", asyncHandler(async (req, res) => {
   const result = await pool.query(
     "UPDATE sections SET deleted_at = NULL WHERE id = $1 RETURNING *",
     [req.params.sectionId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Section not found" });
   res.json(result.rows[0]);
-});
+}));
 
 // POST /api/boms/:bomId/import-sheet
 // Uploads a .xlsx/.xls/.csv following the fixed column layout (A: link,
@@ -189,7 +190,7 @@ bomsRouter.post("/sections/:sectionId/restore", async (req, res) => {
 // section per section-header row found, with its items underneath. Prices
 // are left untouched here -- items with a URL get a scrape kicked off the
 // same way manually-added items do, so price shows up shortly after.
-bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, res) => {
+bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler(async (req, res) => {
   const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.bomId,
     req.userId,
@@ -245,7 +246,7 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, 
   await pool.query("UPDATE boms SET updated_at = now() WHERE id = $1", [req.params.bomId]);
 
   res.json({ sections: createdSections });
-});
+}));
 
 // POST /api/boms/:bomId/refresh-items
 // Bulk re-trigger scrapes for every item in this BOM that has a URL.
@@ -254,7 +255,7 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, 
 // refresh -- that workflow (actions_scrape_one.py) already branches on
 // Amazon vs non-Amazon internally, this endpoint just decides which rows
 // to fire it for.
-bomsRouter.post("/:bomId/refresh-items", async (req, res) => {
+bomsRouter.post("/:bomId/refresh-items", asyncHandler(async (req, res) => {
   const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.bomId,
     req.userId,
@@ -314,11 +315,11 @@ bomsRouter.post("/:bomId/refresh-items", async (req, res) => {
   }
 
   res.json({ triggered: pendingResult.rows.length, filter });
-});
+}));
 
 // --- Items ---
 
-bomsRouter.post("/sections/:sectionId/items", async (req, res) => {
+bomsRouter.post("/sections/:sectionId/items", asyncHandler(async (req, res) => {
   const { name, url, qty, bold, italic, font_size, sort_order } = req.body;
 
   // Same fix as sections: land at the end by default instead of always
@@ -348,9 +349,9 @@ bomsRouter.post("/sections/:sectionId/items", async (req, res) => {
   }
 
   res.json(item);
-});
+}));
 
-bomsRouter.patch("/items/:itemId", async (req, res) => {
+bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
   const { name, url, qty, bold, italic, font_size, sort_order, unit_price, status } = req.body;
   const result = await pool.query(
     `UPDATE items SET
@@ -377,25 +378,25 @@ bomsRouter.patch("/items/:itemId", async (req, res) => {
   }
 
   res.json(item);
-});
+}));
 
-bomsRouter.delete("/items/:itemId", async (req, res) => {
+bomsRouter.delete("/items/:itemId", asyncHandler(async (req, res) => {
   await pool.query("UPDATE items SET deleted_at = now() WHERE id = $1", [req.params.itemId]);
   res.status(204).send();
-});
+}));
 
-bomsRouter.post("/items/:itemId/restore", async (req, res) => {
+bomsRouter.post("/items/:itemId/restore", asyncHandler(async (req, res) => {
   const result = await pool.query(
     "UPDATE items SET deleted_at = NULL WHERE id = $1 RETURNING *",
     [req.params.itemId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   res.json(result.rows[0]);
-});
+}));
 
 // Bulk reorder within a section -- called after a row drag-and-drop.
 // Body: { orderedIds: [itemId, itemId, ...] } in the new desired order.
-bomsRouter.patch("/sections/:sectionId/items/reorder", async (req, res) => {
+bomsRouter.patch("/sections/:sectionId/items/reorder", asyncHandler(async (req, res) => {
   const { orderedIds } = req.body;
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: "orderedIds must be a non-empty array" });
@@ -417,12 +418,12 @@ bomsRouter.patch("/sections/:sectionId/items/reorder", async (req, res) => {
     client.release();
   }
   res.status(204).send();
-});
+}));
 
 // POST /api/boms/items/:itemId/request-captcha-refresh
 // User clicks "Solve CAPTCHA" on a stale Amazon item. Fires the special
 // CAPTCHA-aware workflow instead of the normal scrape-on-demand one.
-bomsRouter.post("/items/:itemId/request-captcha-refresh", async (req, res) => {
+bomsRouter.post("/items/:itemId/request-captcha-refresh", asyncHandler(async (req, res) => {
   const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
     req.params.itemId,
   ]);
@@ -460,22 +461,22 @@ bomsRouter.post("/items/:itemId/request-captcha-refresh", async (req, res) => {
   }
 
   res.json({ status: "started", message: "Screenshot will appear in ~20-40s" });
-});
+}));
 
 // GET /api/boms/items/:itemId/captcha
 // Frontend polls this while waiting for the screenshot to show up.
-bomsRouter.get("/items/:itemId/captcha", async (req, res) => {
+bomsRouter.get("/items/:itemId/captcha", asyncHandler(async (req, res) => {
   const result = await pool.query(
     "SELECT id, captcha_status, captcha_screenshot FROM items WHERE id = $1",
     [req.params.itemId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   res.json(result.rows[0]);
-});
+}));
 
 // POST /api/boms/items/:itemId/captcha-solution
 // User types the CAPTCHA text and submits it here.
-bomsRouter.post("/items/:itemId/captcha-solution", async (req, res) => {
+bomsRouter.post("/items/:itemId/captcha-solution", asyncHandler(async (req, res) => {
   const { solution } = req.body;
   if (!solution) return res.status(400).json({ error: "solution required" });
 
@@ -486,10 +487,10 @@ bomsRouter.post("/items/:itemId/captcha-solution", async (req, res) => {
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   res.json({ ok: true });
-});
+}));
 
 // Manually re-trigger a scrape for one item (e.g. user clicks "refresh price")
-bomsRouter.post("/items/:itemId/refresh", async (req, res) => {
+bomsRouter.post("/items/:itemId/refresh", asyncHandler(async (req, res) => {
   const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
     req.params.itemId,
   ]);
@@ -499,7 +500,7 @@ bomsRouter.post("/items/:itemId/refresh", async (req, res) => {
 
   await triggerScrape(item.id, item.url);
   res.json({ status: "pending", message: "Scrape triggered, check back in ~30-60s" });
-});
+}));
 
 // Fires a GitHub Actions `repository_dispatch` event that runs a single
 // Playwright scrape in a fresh Actions VM (2 vCPU / 7GB, real browser,

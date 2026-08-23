@@ -17,5 +17,18 @@ app.use("/api/boms", bomsRouter);
 app.use("/api/public", publicRouter); // BOM Clean / BOM Links, for Odoo etc.
 app.use("/api/internal", internalRouter); // GitHub Actions scrape callback
 
+// Global error handler. Express 4 does NOT catch errors thrown/rejected
+// inside async route handlers on its own -- without this (and without
+// every route being wrapped in asyncHandler), a thrown error just hangs
+// the request forever with no response ever sent. This was the cause of
+// "clicking a BOM just loads forever" -- some query/logic threw for that
+// BOM's data and the client never got so much as a 500 back.
+// Must be registered last, after all routers.
+app.use((err, req, res, next) => {
+  console.error("Unhandled route error:", err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
 const port = process.env.API_PORT || 4000;
 app.listen(port, () => console.log(`BOM Tool API listening on :${port}`));

@@ -132,6 +132,7 @@ export default function App() {
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
   const [bomListLoading, setBomListLoading] = useState(false);
   const [openingBomId, setOpeningBomId] = useState(null);
+  const [bomLoadError, setBomLoadError] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
@@ -594,12 +595,36 @@ export default function App() {
 
   async function loadBom(id) {
     setOpeningBomId(id);
+    setBomLoadError(null);
     setSheetImportJustSucceeded(false);
-    const res = await fetch(`${API_URL}/api/boms/${id}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    setBom(await res.json());
-    setOpeningBomId(null);
+    // Previously this had no try/catch: if the fetch failed, or the
+    // response wasn't valid JSON (e.g. a 500/timeout returning an HTML
+    // error page instead), the exception meant setOpeningBomId(null)
+    // below never ran -- the button was stuck showing its loading
+    // spinner forever with no error, no matter how many times you
+    // clicked. This is what "click it, it just loads forever" was.
+    try {
+      const res = await fetch(`${API_URL}/api/boms/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let message = `Failed to load BOM (${res.status})`;
+        try {
+          const body = await res.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // response wasn't JSON (e.g. a raw 500/502 HTML page) -- fall
+          // back to the generic status-based message above
+        }
+        throw new Error(message);
+      }
+      setBom(await res.json());
+    } catch (e) {
+      console.error("loadBom failed:", e);
+      setBomLoadError(e.message || "Failed to load this BOM. Please try again.");
+    } finally {
+      setOpeningBomId(null);
+    }
   }
 
   // Quiet refetch used by the auto-poll below -- same as loadBom but
@@ -1044,6 +1069,29 @@ export default function App() {
                 <IconPlus size={14} /> New BOM
               </button>
             </div>
+
+            {bomLoadError && (
+              <div
+                style={{
+                  background: theme.errBg || "#fdecea",
+                  color: theme.errText || "#c0392b",
+                  border: `1px solid ${theme.errText || "#c0392b"}33`,
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  fontSize: 13,
+                  marginBottom: 14,
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                }}
+              >
+                <span>{bomLoadError}</span>
+                <button
+                  onClick={() => setBomLoadError(null)}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {bomListLoading && (
               <p style={{ color: theme.muted, fontSize: 13.5, textAlign: "center", padding: "24px 0" }}>Loading…</p>
