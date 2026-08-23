@@ -24,13 +24,15 @@ async function getBomByApiKey(req, res, next) {
 
 async function loadFullBom(bom) {
   const sectionsResult = await pool.query(
-    "SELECT * FROM sections WHERE bom_id = $1 ORDER BY sort_order",
+    `SELECT * FROM sections WHERE bom_id = $1 AND deleted_at IS NULL
+     ORDER BY sort_order, created_at, id`,
     [bom.id]
   );
   const itemsResult = await pool.query(
     `SELECT items.* FROM items
      JOIN sections ON items.section_id = sections.id
-     WHERE sections.bom_id = $1 ORDER BY items.sort_order`,
+     WHERE sections.bom_id = $1 AND sections.deleted_at IS NULL AND items.deleted_at IS NULL
+     ORDER BY items.sort_order, items.created_at, items.id`,
     [bom.id]
   );
   const items = itemsResult.rows;

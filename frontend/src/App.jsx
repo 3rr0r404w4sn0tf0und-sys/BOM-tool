@@ -8,6 +8,8 @@ import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconRefresh } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
+import { calculateTotals, allItems } from "./totals.js";
+import { useUndoRedo } from "./useUndoRedo.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -140,7 +142,195 @@ export default function App() {
   const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "non-amazon" | "all"
   const [taxRateEditing, setTaxRateEditing] = useState(false);
   const [taxRateDraft, setTaxRateDraft] = useState("");
+  const [dragSectionId, setDragSectionId] = useState(null);
+  const [dragOverSectionId, setDragOverSectionId] = useState(null);
   const theme = getTheme(themeName);
+  const history = useUndoRedo();
+
+  // Applies a local edit to bom.sections and recomputes totals from it --
+  // this is what lets add/delete/edit/reorder feel instant instead of
+  // waiting on a full loadBom() round trip after every action.
+  function setSections(updater) {
+    setBom((prev) => {
+      if (!prev) return prev;
+      const sections = updater(prev.sections);
+      return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
+    });
+  }
+
+  function authHeaders(extra) {
+    return { Authorization: `Bearer ${token}`, ...(extra || {}) };
+  }
+  function jsonHeaders() {
+    return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+  }
+
+  // --- Row (item) mutations: optimistic local update + undo/redo command,
+  // API call fired in the background. All rely on soft-delete/restore on
+  // the backend so ids never change across undo/redo, however many times
+  // a row gets deleted and brought back. ---
+
+  async function addRow(sectionId) {
+    const res = await fetch(`${API_URL}/api/boms/sections/${sectionId}/items`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ name: "New item", qty: 1 }),
+    });
+    const item = await res.json();
+    setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: [...s.items, item] } : s)));
+    history.push({
+      undo: () => {
+        setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: s.items.filter((i) => i.id !== item.id) } : s)));
+        fetch(`${API_URL}/api/boms/items/${item.id}`, { method: "DELETE", headers: authHeaders() });
+      },
+      redo: () => {
+        setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: [...s.items, item] } : s)));
+        fetch(`${API_URL}/api/boms/items/${item.id}/restore`, { method: "POST", headers: authHeaders() });
+      },
+    });
+  }
+
+  function deleteRow(sectionId, itemId) {
+    const section = bom.sections.find((s) => s.id === sectionId);
+    const index = section.items.findIndex((i) => i.id === itemId);
+    const removedItem = section.items[index];
+    if (!removedItem) return;
+
+    function apply() {
+      setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: s.items.filter((i) => i.id !== itemId) } : s)));
+      fetch(`${API_URL}/api/boms/items/${itemId}`, { method: "DELETE", headers: authHeaders() });
+    }
+    function revert() {
+      setSections((sections) => sections.map((s) => {
+        if (s.id !== sectionId) return s;
+        const items = [...s.items];
+        items.splice(Math.min(index, items.length), 0, removedItem);
+        return { ...s, items };
+      }));
+      fetch(`${API_URL}/api/boms/items/${itemId}/restore`, { method: "POST", headers: authHeaders() });
+    }
+    apply();
+    history.push({ undo: revert, redo: apply });
+  }
+
+  function patchItem(sectionId, itemId, patch) {
+    const section = bom.sections.find((s) => s.id === sectionId);
+    const item = section?.items.find((i) => i.id === itemId);
+    if (!item) return;
+    const before = {};
+    Object.keys(patch).forEach((k) => (before[k] = item[k]));
+
+    function apply(p) {
+      setSections((sections) => sections.map((s) => (s.id !== sectionId ? s : { ...s, items: s.items.map((i) => (i.id === itemId ? { ...i, ...p } : i)) })));
+      fetch(`${API_URL}/api/boms/items/${itemId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify(p) });
+    }
+    apply(patch);
+    history.push({ undo: () => apply(before), redo: () => apply(patch) });
+  }
+
+  function reorderItems(sectionId, orderedIds) {
+    const section = bom.sections.find((s) => s.id === sectionId);
+    const prevOrder = section.items.map((i) => i.id);
+
+    function apply(ids) {
+      setSections((sections) => sections.map((s) => {
+        if (s.id !== sectionId) return s;
+        const byId = Object.fromEntries(s.items.map((i) => [i.id, i]));
+        return { ...s, items: ids.map((id) => byId[id]).filter(Boolean) };
+      }));
+      fetch(`${API_URL}/api/boms/sections/${sectionId}/items/reorder`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ orderedIds: ids }),
+      });
+    }
+    apply(orderedIds);
+    history.push({ undo: () => apply(prevOrder), redo: () => apply(orderedIds) });
+  }
+
+  // --- Table (section) mutations ---
+
+  function deleteTable(sectionId) {
+    const index = bom.sections.findIndex((s) => s.id === sectionId);
+    const removedSection = bom.sections[index];
+    if (!removedSection) return;
+
+    function apply() {
+      setBom((prev) => {
+        const sections = prev.sections.filter((s) => s.id !== sectionId);
+        return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
+      });
+      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "DELETE", headers: authHeaders() });
+    }
+    function revert() {
+      setBom((prev) => {
+        const sections = [...prev.sections];
+        sections.splice(Math.min(index, sections.length), 0, removedSection);
+        return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
+      });
+      fetch(`${API_URL}/api/boms/sections/${sectionId}/restore`, { method: "POST", headers: authHeaders() });
+    }
+    apply();
+    history.push({ undo: revert, redo: apply });
+  }
+
+  function renameSection(sectionId, title) {
+    const section = bom.sections.find((s) => s.id === sectionId);
+    if (!section) return;
+    const before = section.title;
+
+    function apply(t) {
+      setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, title: t } : s)));
+      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ title: t }) });
+    }
+    apply(title);
+    history.push({ undo: () => apply(before), redo: () => apply(title) });
+  }
+
+  function reorderSections(orderedIds) {
+    const prevOrder = bom.sections.map((s) => s.id);
+
+    function apply(ids) {
+      setBom((prev) => {
+        const byId = Object.fromEntries(prev.sections.map((s) => [s.id, s]));
+        const sections = ids.map((id) => byId[id]).filter(Boolean);
+        return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
+      });
+      fetch(`${API_URL}/api/boms/${bom.id}/sections/reorder`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ orderedIds: ids }),
+      });
+    }
+    apply(orderedIds);
+    history.push({ undo: () => apply(prevOrder), redo: () => apply(orderedIds) });
+  }
+
+  function onSectionDragStart(e, sectionId) {
+    setDragSectionId(sectionId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", sectionId);
+  }
+  function onSectionDragOver(e, sectionId) {
+    if (!dragSectionId || dragSectionId === sectionId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverSectionId !== sectionId) setDragOverSectionId(sectionId);
+  }
+  function onSectionDrop(e, targetSectionId) {
+    e.preventDefault();
+    const draggedId = dragSectionId;
+    setDragSectionId(null);
+    setDragOverSectionId(null);
+    if (!draggedId || draggedId === targetSectionId) return;
+    const ids = bom.sections.map((s) => s.id);
+    const fromIdx = ids.indexOf(draggedId);
+    const toIdx = ids.indexOf(targetSectionId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, draggedId);
+    reorderSections(ids);
+  }
 
   function persistToken(t) {
     try {
@@ -495,12 +685,30 @@ export default function App() {
 
   async function addTable() {
     if (!bom) return;
-    await fetch(`${API_URL}/api/boms/${bom.id}/sections`, {
+    // sort_order is intentionally omitted -- the backend now computes
+    // "end of list" itself (see api/routes/boms.js), which is the fix
+    // for new tables/rows landing in the wrong place.
+    const res = await fetch(`${API_URL}/api/boms/${bom.id}/sections`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ title: "New Table", sort_order: bom.sections.length }),
+      headers: jsonHeaders(),
+      body: JSON.stringify({ title: "New Table" }),
     });
-    loadBom(bom.id);
+    const section = await res.json();
+    const newSection = { ...section, items: [] };
+    setBom((prev) => (prev ? { ...prev, sections: [...prev.sections, newSection] } : prev));
+    history.push({
+      undo: () => {
+        setBom((prev) => {
+          const sections = prev.sections.filter((s) => s.id !== newSection.id);
+          return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
+        });
+        fetch(`${API_URL}/api/boms/sections/${newSection.id}`, { method: "DELETE", headers: authHeaders() });
+      },
+      redo: () => {
+        setBom((prev) => (prev ? { ...prev, sections: [...prev.sections, newSection] } : prev));
+        fetch(`${API_URL}/api/boms/sections/${newSection.id}/restore`, { method: "POST", headers: authHeaders() });
+      },
+    });
   }
 
   // Upload a .xlsx/.xls/.csv following the fixed column layout (link in A,
@@ -1004,6 +1212,28 @@ export default function App() {
               >
                 <IconPlus size={13} /> Add table
               </button>
+              <span style={{ display: "inline-flex", marginLeft: "auto", gap: 4 }}>
+                <button
+                  onClick={history.undo}
+                  title="Undo (Ctrl+Z)"
+                  style={{
+                    padding: "7px 10px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  ↶ Undo
+                </button>
+                <button
+                  onClick={history.redo}
+                  title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+                  style={{
+                    padding: "7px 10px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  ↷ Redo
+                </button>
+              </span>
             </div>
 
             {sheetImportError && (
@@ -1051,7 +1281,23 @@ export default function App() {
                 section={section}
                 theme={theme}
                 token={token}
-                onChange={() => loadBom(bom.id)}
+                onResolved={() => pollBomQuietly(bom.id)}
+                onAddRow={() => addRow(section.id)}
+                onDeleteRow={(itemId) => deleteRow(section.id, itemId)}
+                onPatchItem={(itemId, patch) => patchItem(section.id, itemId, patch)}
+                onReorderItems={(orderedIds) => reorderItems(section.id, orderedIds)}
+                onRenameSection={(title) => renameSection(section.id, title)}
+                onDeleteTable={() => deleteTable(section.id)}
+                isSectionDragOver={dragOverSectionId === section.id}
+                sectionDragHandleProps={{
+                  draggable: true,
+                  onDragStart: (e) => onSectionDragStart(e, section.id),
+                }}
+                sectionDropProps={{
+                  onDragOver: (e) => onSectionDragOver(e, section.id),
+                  onDrop: (e) => onSectionDrop(e, section.id),
+                  onDragEnd: () => { setDragSectionId(null); setDragOverSectionId(null); },
+                }}
               />
             ))}
 

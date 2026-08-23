@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import CaptchaSolver from "./CaptchaSolver.jsx";
 import ContextMenu from "./ContextMenu.jsx";
-import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh } from "./Icons.jsx";
+import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
@@ -176,61 +176,68 @@ function CostCell({ item, theme, token, onResolved }) {
   );
 }
 
-export default function SectionTable({ section, theme, token, onChange }) {
+// SectionTable is now a "dumb-ish" renderer: every mutation (add/delete
+// row, edit a cell, reorder, rename/delete table) is delegated up to App
+// via props, so App can apply it optimistically to local state, push an
+// undo/redo command, and fire the API call in the background -- instead
+// of this component doing its own fetch-then-reload-everything, which is
+// what caused the lag on every single row action.
+export default function SectionTable({
+  section,
+  theme,
+  token,
+  onResolved,
+  onAddRow,
+  onDeleteRow,
+  onPatchItem,
+  onReorderItems,
+  onRenameSection,
+  onDeleteTable,
+  sectionDragHandleProps,
+  sectionDropProps,
+  isSectionDragOver,
+}) {
   const [rowMenu, setRowMenu] = useState(null);
   const [tableMenu, setTableMenu] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState(section.title);
+  const [dragItemId, setDragItemId] = useState(null);
+  const [dragOverItemId, setDragOverItemId] = useState(null);
 
-  async function patchItem(itemId, patch) {
-    await fetch(`${API_URL}/api/boms/items/${itemId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(patch),
-    });
-    // Pasting/changing a URL kicks off a scrape server-side. The item
-    // comes back from that PATCH as "pending", and App's global auto-poll
-    // effect (keyed off any pending item existing in the open BOM) takes
-    // over from here and keeps refetching until it resolves -- no local
-    // polling needed on top of that.
-    onChange();
-  }
-
-  async function addRow() {
-    await fetch(`${API_URL}/api/boms/sections/${section.id}/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name: "New item", qty: 1 }),
-    });
-    onChange();
-  }
-
-  async function deleteRow(itemId) {
-    await fetch(`${API_URL}/api/boms/items/${itemId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    onChange();
-  }
-
-  async function deleteTable() {
-    await fetch(`${API_URL}/api/boms/sections/${section.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    onChange();
-  }
-
-  async function commitTitle() {
+  function commitTitle() {
     setTitleEditing(false);
-    if (titleDraft.trim() && titleDraft !== section.title) {
-      await fetch(`${API_URL}/api/boms/sections/${section.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ title: titleDraft.trim() }),
-      });
-      onChange();
-    }
+    const next = titleDraft.trim();
+    if (next && next !== section.title) onRenameSection(next);
+  }
+
+  function onRowDragStart(e, itemId) {
+    setDragItemId(itemId);
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox requires data to be set for drag to actually start.
+    e.dataTransfer.setData("text/plain", itemId);
+  }
+
+  function onRowDragOver(e, itemId) {
+    if (!dragItemId || dragItemId === itemId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverItemId !== itemId) setDragOverItemId(itemId);
+  }
+
+  function onRowDrop(e, targetItemId) {
+    e.preventDefault();
+    const draggedId = dragItemId;
+    setDragItemId(null);
+    setDragOverItemId(null);
+    if (!draggedId || draggedId === targetItemId) return;
+
+    const ids = section.items.map((i) => i.id);
+    const fromIdx = ids.indexOf(draggedId);
+    const toIdx = ids.indexOf(targetItemId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, draggedId);
+    onReorderItems(ids);
   }
 
   const colHeader = {
@@ -246,12 +253,14 @@ export default function SectionTable({ section, theme, token, onChange }) {
 
   return (
     <div
+      {...sectionDropProps}
       style={{
         background: theme.cardBg,
-        border: `1px solid ${theme.border}`,
+        border: `1px solid ${isSectionDragOver ? theme.accent : theme.border}`,
         borderRadius: 12,
         overflow: "hidden",
         marginBottom: 20,
+        transition: "border-color 120ms ease",
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -260,40 +269,51 @@ export default function SectionTable({ section, theme, token, onChange }) {
           x: e.clientX,
           y: e.clientY,
           items: [
-            { label: "Add row", icon: IconPlus, onClick: addRow },
-            { label: "Delete table", icon: IconTrash, onClick: deleteTable, danger: true },
+            { label: "Add row", icon: IconPlus, onClick: onAddRow },
+            { label: "Delete table", icon: IconTrash, onClick: onDeleteTable, danger: true },
           ],
         });
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: `1px solid ${theme.border}` }}>
-        {titleEditing ? (
-          <input
-            autoFocus
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            style={{
-              fontSize: 15, fontWeight: 700, border: `1px solid ${theme.accent}`, borderRadius: 6,
-              padding: "4px 8px", background: theme.cardBg, color: theme.text,
-            }}
-          />
-        ) : (
-          <button
-            onClick={() => { setTitleDraft(section.title); setTitleEditing(true); }}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, border: "none", background: "none", cursor: "pointer",
-              fontSize: 15, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6,
-            }}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span
+            {...sectionDragHandleProps}
+            title="Drag to reorder table"
+            style={{ display: "flex", cursor: "grab", color: theme.muted, opacity: 0.6, padding: 4, marginLeft: -4 }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.6)}
           >
-            {section.title}
-            <IconPencil size={12} color={theme.muted} />
-          </button>
-        )}
+            <IconGrip size={14} color={theme.muted} />
+          </span>
+          {titleEditing ? (
+            <input
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+              style={{
+                fontSize: 15, fontWeight: 700, border: `1px solid ${theme.accent}`, borderRadius: 6,
+                padding: "4px 8px", background: theme.cardBg, color: theme.text,
+              }}
+            />
+          ) : (
+            <button
+              onClick={() => { setTitleDraft(section.title); setTitleEditing(true); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, border: "none", background: "none", cursor: "pointer",
+                fontSize: 15, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6,
+              }}
+            >
+              {section.title}
+              <IconPencil size={12} color={theme.muted} />
+            </button>
+          )}
+        </div>
 
         <button
-          onClick={deleteTable}
+          onClick={onDeleteTable}
           title="Delete table"
           style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted }}
         >
@@ -304,10 +324,11 @@ export default function SectionTable({ section, theme, token, onChange }) {
       <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <thead>
           <tr>
-            <th style={{ ...colHeader, width: "32%" }}>Link</th>
-            <th style={{ ...colHeader, width: "28%" }}>Name</th>
+            <th style={{ ...colHeader, width: "6%" }} />
+            <th style={{ ...colHeader, width: "30%" }}>Link</th>
+            <th style={{ ...colHeader, width: "26%" }}>Name</th>
             <th style={{ ...colHeader, width: "10%", textAlign: "right" }}>QTY</th>
-            <th style={{ ...colHeader, width: "26%", textAlign: "right" }}>Cost</th>
+            <th style={{ ...colHeader, width: "24%", textAlign: "right" }}>Cost</th>
             <th style={{ ...colHeader, width: "4%" }} />
           </tr>
         </thead>
@@ -315,6 +336,10 @@ export default function SectionTable({ section, theme, token, onChange }) {
           {section.items.map((item) => (
             <tr
               key={item.id}
+              draggable={false}
+              onDragOver={(e) => onRowDragOver(e, item.id)}
+              onDrop={(e) => onRowDrop(e, item.id)}
+              onDragEnd={() => { setDragItemId(null); setDragOverItemId(null); }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -322,20 +347,36 @@ export default function SectionTable({ section, theme, token, onChange }) {
                   x: e.clientX,
                   y: e.clientY,
                   items: [
-                    { label: "Add row below", icon: IconPlus, onClick: addRow },
-                    { label: "Delete row", icon: IconTrash, onClick: () => deleteRow(item.id), danger: true },
+                    { label: "Add row below", icon: IconPlus, onClick: onAddRow },
+                    { label: "Delete row", icon: IconTrash, onClick: () => onDeleteRow(item.id), danger: true },
                   ],
                 });
               }}
-              style={{ borderBottom: `1px solid ${theme.rowBorder}` }}
+              style={{
+                borderBottom: `1px solid ${theme.rowBorder}`,
+                background: dragOverItemId === item.id ? theme.rowBorder : "transparent",
+                opacity: dragItemId === item.id ? 0.4 : 1,
+              }}
             >
+              <td style={{ padding: "2px 4px", textAlign: "center" }}>
+                <span
+                  draggable
+                  onDragStart={(e) => onRowDragStart(e, item.id)}
+                  title="Drag to reorder row"
+                  style={{ display: "inline-flex", cursor: "grab", color: theme.muted, opacity: 0.5, padding: 4 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.5)}
+                >
+                  <IconGrip size={13} color={theme.muted} />
+                </span>
+              </td>
               <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
                 <EditableCell
                   value={item.url}
                   placeholder="paste a link…"
                   theme={theme}
                   mono
-                  onCommit={(v) => patchItem(item.id, { url: v })}
+                  onCommit={(v) => onPatchItem(item.id, { url: v, status: "pending" })}
                 />
               </td>
               <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
@@ -343,7 +384,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
                   value={item.name}
                   placeholder="item name"
                   theme={theme}
-                  onCommit={(v) => patchItem(item.id, { name: v })}
+                  onCommit={(v) => onPatchItem(item.id, { name: v })}
                 />
               </td>
               <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
@@ -354,16 +395,16 @@ export default function SectionTable({ section, theme, token, onChange }) {
                   align="right"
                   onCommit={(v) => {
                     const n = parseInt(v, 10);
-                    patchItem(item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
+                    onPatchItem(item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
                   }}
                 />
               </td>
               <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                <CostCell item={item} theme={theme} token={token} onResolved={onChange} />
+                <CostCell item={item} theme={theme} token={token} onResolved={onResolved} />
               </td>
               <td style={{ padding: "2px 4px" }}>
                 <button
-                  onClick={() => deleteRow(item.id)}
+                  onClick={() => onDeleteRow(item.id)}
                   title="Delete row"
                   style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted, opacity: 0.6 }}
                   onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
@@ -378,7 +419,7 @@ export default function SectionTable({ section, theme, token, onChange }) {
       </table>
 
       <button
-        onClick={addRow}
+        onClick={onAddRow}
         style={{
           width: "100%",
           display: "flex",

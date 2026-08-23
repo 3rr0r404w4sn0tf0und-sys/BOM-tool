@@ -12,6 +12,17 @@ export function IconGear({ size = 16, color = "currentColor" }) {
   );
 }
 
+// Six-dot drag handle (2 columns x 3 rows), the standard "grip" affordance.
+export function IconGrip({ size = 16, color = "currentColor" }) {
+  const cols = [8, 16];
+  const rows = [6, 12, 18];
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      {cols.flatMap((cx) => rows.map((cy) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.6" />))}
+    </svg>
+  );
+}
+
 export function IconLogout({ size = 16, color = "currentColor" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

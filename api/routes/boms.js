@@ -47,7 +47,8 @@ bomsRouter.get("/:id", async (req, res) => {
   if (!bom) return res.status(404).json({ error: "BOM not found" });
 
   const sectionsResult = await pool.query(
-    "SELECT * FROM sections WHERE bom_id = $1 ORDER BY sort_order",
+    `SELECT * FROM sections WHERE bom_id = $1 AND deleted_at IS NULL
+     ORDER BY sort_order, created_at, id`,
     [bom.id]
   );
   const sections = sectionsResult.rows;
@@ -55,7 +56,8 @@ bomsRouter.get("/:id", async (req, res) => {
   const itemsResult = await pool.query(
     `SELECT items.* FROM items
      JOIN sections ON items.section_id = sections.id
-     WHERE sections.bom_id = $1 ORDER BY items.sort_order`,
+     WHERE sections.bom_id = $1 AND sections.deleted_at IS NULL AND items.deleted_at IS NULL
+     ORDER BY items.sort_order, items.created_at, items.id`,
     [bom.id]
   );
   const allItems = itemsResult.rows;
@@ -100,12 +102,56 @@ bomsRouter.post("/:bomId/sections", async (req, res) => {
   ]);
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
 
+  // Always land new sections at the end unless a sort_order was
+  // explicitly given -- this is the fix for the "new rows appear in
+  // random places" bug (everything used to insert at sort_order 0).
+  let order = sort_order;
+  if (order === undefined || order === null) {
+    const maxResult = await pool.query(
+      "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1 AND deleted_at IS NULL",
+      [req.params.bomId]
+    );
+    order = maxResult.rows[0].max_order + 1;
+  }
+
   const result = await pool.query(
     `INSERT INTO sections (bom_id, title, emoji, icon_url, sort_order)
-     VALUES ($1, $2, $3, $4, COALESCE($5, 0)) RETURNING *`,
-    [req.params.bomId, title || "Untitled Section", emoji, icon_url, sort_order]
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [req.params.bomId, title || "Untitled Section", emoji, icon_url, order]
   );
   res.json(result.rows[0]);
+});
+
+// Bulk reorder -- called after a drag-and-drop of table cards. Body:
+// { orderedIds: [sectionId, sectionId, ...] } in the new desired order.
+bomsRouter.patch("/:bomId/sections/reorder", async (req, res) => {
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: "orderedIds must be a non-empty array" });
+  }
+  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
+    req.params.bomId,
+    req.userId,
+  ]);
+  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (let i = 0; i < orderedIds.length; i++) {
+      await client.query(
+        "UPDATE sections SET sort_order = $1 WHERE id = $2 AND bom_id = $3",
+        [i, orderedIds[i], req.params.bomId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  res.status(204).send();
 });
 
 bomsRouter.patch("/sections/:sectionId", async (req, res) => {
@@ -120,9 +166,21 @@ bomsRouter.patch("/sections/:sectionId", async (req, res) => {
   res.json(result.rows[0]);
 });
 
+// Soft delete -- keeps the row (and its items) around so "undo" can
+// bring it straight back by id instead of having to recreate everything
+// from scratch with a brand new id.
 bomsRouter.delete("/sections/:sectionId", async (req, res) => {
-  await pool.query("DELETE FROM sections WHERE id = $1", [req.params.sectionId]);
+  await pool.query("UPDATE sections SET deleted_at = now() WHERE id = $1", [req.params.sectionId]);
   res.status(204).send();
+});
+
+bomsRouter.post("/sections/:sectionId/restore", async (req, res) => {
+  const result = await pool.query(
+    "UPDATE sections SET deleted_at = NULL WHERE id = $1 RETURNING *",
+    [req.params.sectionId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Section not found" });
+  res.json(result.rows[0]);
 });
 
 // POST /api/boms/:bomId/import-sheet
@@ -152,7 +210,7 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), async (req, 
   }
 
   const existingOrder = await pool.query(
-    "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1",
+    "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1 AND deleted_at IS NULL",
     [req.params.bomId]
   );
   let sortOrder = existingOrder.rows[0].max_order + 1;
@@ -262,12 +320,25 @@ bomsRouter.post("/:bomId/refresh-items", async (req, res) => {
 
 bomsRouter.post("/sections/:sectionId/items", async (req, res) => {
   const { name, url, qty, bold, italic, font_size, sort_order } = req.body;
+
+  // Same fix as sections: land at the end by default instead of always
+  // sort_order 0, which is what caused rows to come back in random order
+  // once a table had more than a couple of items.
+  let order = sort_order;
+  if (order === undefined || order === null) {
+    const maxResult = await pool.query(
+      "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM items WHERE section_id = $1 AND deleted_at IS NULL",
+      [req.params.sectionId]
+    );
+    order = maxResult.rows[0].max_order + 1;
+  }
+
   const result = await pool.query(
     `INSERT INTO items (section_id, name, url, qty, bold, italic, font_size, sort_order, status)
      VALUES ($1, $2, $3, COALESCE($4, 1), COALESCE($5,false), COALESCE($6,false),
-             COALESCE($7,19), COALESCE($8,0), 'pending')
+             COALESCE($7,19), $8, 'pending')
      RETURNING *`,
-    [req.params.sectionId, name, url, qty, bold, italic, font_size, sort_order]
+    [req.params.sectionId, name, url, qty, bold, italic, font_size, order]
   );
   const item = result.rows[0];
 
@@ -309,7 +380,42 @@ bomsRouter.patch("/items/:itemId", async (req, res) => {
 });
 
 bomsRouter.delete("/items/:itemId", async (req, res) => {
-  await pool.query("DELETE FROM items WHERE id = $1", [req.params.itemId]);
+  await pool.query("UPDATE items SET deleted_at = now() WHERE id = $1", [req.params.itemId]);
+  res.status(204).send();
+});
+
+bomsRouter.post("/items/:itemId/restore", async (req, res) => {
+  const result = await pool.query(
+    "UPDATE items SET deleted_at = NULL WHERE id = $1 RETURNING *",
+    [req.params.itemId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
+  res.json(result.rows[0]);
+});
+
+// Bulk reorder within a section -- called after a row drag-and-drop.
+// Body: { orderedIds: [itemId, itemId, ...] } in the new desired order.
+bomsRouter.patch("/sections/:sectionId/items/reorder", async (req, res) => {
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: "orderedIds must be a non-empty array" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (let i = 0; i < orderedIds.length; i++) {
+      await client.query(
+        "UPDATE items SET sort_order = $1 WHERE id = $2 AND section_id = $3",
+        [i, orderedIds[i], req.params.sectionId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
   res.status(204).send();
 });
 
