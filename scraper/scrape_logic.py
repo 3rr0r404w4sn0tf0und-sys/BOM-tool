@@ -112,7 +112,16 @@ def try_generic_scrape(url: str) -> dict:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    og_price = soup.find("meta", property="product:price:amount")
+    # Shopify (and some other platforms) emit the standard Open Graph
+    # "og:price:amount" tag; the older Facebook-specific namespace
+    # "product:price:amount" also shows up on some sites. Check both --
+    # missing "og:price:amount" was silently sending every Shopify page
+    # (which don't set the product: namespace) straight past this fast
+    # path and into JSON-LD/itemprop/table extraction, which often don't
+    # match either, ending in a false "price_not_found".
+    og_price = soup.find("meta", property="product:price:amount") or soup.find(
+        "meta", property="og:price:amount"
+    )
     if og_price and og_price.get("content"):
         price = _clean_price(og_price["content"])
         if price:
