@@ -72,6 +72,7 @@ publicRouter.get("/bom-clean", getBomByApiKey, asyncHandler(async (req, res) => 
       item: i.name,
       qty: Number(i.qty),
       price: priceLabel(i),
+      link: i.url || null,
       bold: i.bold,
       italic: i.italic,
       font_size: i.font_size,
