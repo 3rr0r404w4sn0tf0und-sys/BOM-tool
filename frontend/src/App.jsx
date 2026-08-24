@@ -288,6 +288,19 @@ export default function App() {
     history.push({ undo: () => apply(before), redo: () => apply(title) });
   }
 
+  function setSectionEmoji(sectionId, emoji) {
+    const section = bom.sections.find((s) => s.id === sectionId);
+    if (!section) return;
+    const before = section.emoji ?? null;
+
+    function apply(e) {
+      setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, emoji: e } : s)));
+      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ emoji: e || "" }) });
+    }
+    apply(emoji);
+    history.push({ undo: () => apply(before), redo: () => apply(emoji) });
+  }
+
   function reorderSections(orderedIds) {
     const prevOrder = bom.sections.map((s) => s.id);
 
@@ -1335,6 +1348,7 @@ export default function App() {
                 onPatchItem={(itemId, patch) => patchItem(section.id, itemId, patch)}
                 onReorderItems={(orderedIds) => reorderItems(section.id, orderedIds)}
                 onRenameSection={(title) => renameSection(section.id, title)}
+                onChangeEmoji={(emoji) => setSectionEmoji(section.id, emoji)}
                 onDeleteTable={() => deleteTable(section.id)}
                 isSectionDragOver={dragOverSectionId === section.id}
                 sectionDragHandleProps={{

@@ -1,9 +1,100 @@
 import React, { useState, useEffect, useRef } from "react";
 import CaptchaSolver from "./CaptchaSolver.jsx";
 import ContextMenu from "./ContextMenu.jsx";
-import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip } from "./Icons.jsx";
+import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip, IconSmiley } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+// Common section emoji, grouped loosely by what people actually label
+// BOM tables with (electronics/hardware-flavored, since that's the app),
+// plus a general set. Click one to set it, click the x to clear back to
+// no emoji.
+const EMOJI_CHOICES = [
+  "🔋", "⚡", "🔌", "📡", "🛠️", "🔩", "⚙️", "🧰",
+  "🖥️", "💾", "📷", "🚀", "✈️", "🛞", "🧲", "🔧",
+  "📦", "🧵", "🪛", "🔗", "🧪", "💡", "🖨️", "🧱",
+];
+
+// Small popover for picking (or clearing) a section's emoji. Sits next
+// to the pencil/rename button in the section header.
+function EmojiPicker({ theme, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", display: "flex" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title={value ? "Change emoji" : "Add emoji"}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          border: "none", background: "none", cursor: "pointer", padding: 4,
+          borderRadius: 6, color: theme.muted, fontSize: 13, lineHeight: 1,
+        }}
+      >
+        {value ? <span style={{ fontSize: 13 }}>{value}</span> : <IconSmiley size={12} color={theme.muted} />}
+      </button>
+
+      <div
+        style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20,
+          background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10,
+          boxShadow: "0 10px 28px rgba(0,0,0,0.18)", width: 216, padding: 10,
+          transformOrigin: "top left",
+          opacity: open ? 1 : 0,
+          transform: open ? "scale(1) translateY(0)" : "scale(0.96) translateY(-4px)",
+          pointerEvents: open ? "auto" : "none",
+          transition: "opacity 150ms ease, transform 150ms ease",
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 2 }}>
+          {EMOJI_CHOICES.map((e) => (
+            <button
+              key={e}
+              onClick={() => { onChange(e); setOpen(false); }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 17, padding: "5px 0", borderRadius: 6, border: "none",
+                cursor: "pointer", background: e === value ? theme.accentSoft || theme.border : "transparent",
+              }}
+              onMouseEnter={(ev) => (ev.currentTarget.style.background = theme.border)}
+              onMouseLeave={(ev) => (ev.currentTarget.style.background = e === value ? (theme.accentSoft || theme.border) : "transparent")}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+        {value && (
+          <button
+            onClick={() => { onChange(""); setOpen(false); }}
+            style={{
+              width: "100%", marginTop: 8, padding: "6px 0", fontSize: 12, fontWeight: 600,
+              border: `1px solid ${theme.border}`, borderRadius: 7, background: "none",
+              color: theme.muted, cursor: "pointer",
+            }}
+          >
+            Remove emoji
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // A single editable cell: shows as plain text, becomes an input on click,
 // commits on blur/Enter, reverts on Escape.
@@ -193,6 +284,7 @@ export default function SectionTable({
   onReorderItems,
   onRenameSection,
   onDeleteTable,
+  onChangeEmoji,
   sectionDragHandleProps,
   sectionDropProps,
   isSectionDragOver,
@@ -306,10 +398,11 @@ export default function SectionTable({
                 fontSize: 15, fontWeight: 700, color: theme.text, padding: "4px 6px", borderRadius: 6,
               }}
             >
-              {section.title}
+              {section.emoji ? `${section.emoji} ` : ""}{section.title}
               <IconPencil size={12} color={theme.muted} />
             </button>
           )}
+          <EmojiPicker theme={theme} value={section.emoji} onChange={onChangeEmoji} />
         </div>
 
         <button
