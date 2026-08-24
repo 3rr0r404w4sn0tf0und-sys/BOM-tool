@@ -47,25 +47,36 @@ bomsRouter.get("/:id", asyncHandler(async (req, res) => {
   const bom = bomResult.rows[0];
   if (!bom) return res.status(404).json({ error: "BOM not found" });
 
-  const sectionsResult = await pool.query(
-    `SELECT * FROM sections WHERE bom_id = $1 AND deleted_at IS NULL
-     ORDER BY sort_order, created_at, id`,
-    [bom.id]
-  );
+  // These two queries don't depend on each other -- fire them together
+  // instead of waiting on one before starting the next.
+  const [sectionsResult, itemsResult] = await Promise.all([
+    pool.query(
+      `SELECT * FROM sections WHERE bom_id = $1 AND deleted_at IS NULL
+       ORDER BY sort_order, created_at, id`,
+      [bom.id]
+    ),
+    pool.query(
+      `SELECT items.* FROM items
+       JOIN sections ON items.section_id = sections.id
+       WHERE sections.bom_id = $1 AND sections.deleted_at IS NULL AND items.deleted_at IS NULL
+       ORDER BY items.sort_order, items.created_at, items.id`,
+      [bom.id]
+    ),
+  ]);
   const sections = sectionsResult.rows;
-
-  const itemsResult = await pool.query(
-    `SELECT items.* FROM items
-     JOIN sections ON items.section_id = sections.id
-     WHERE sections.bom_id = $1 AND sections.deleted_at IS NULL AND items.deleted_at IS NULL
-     ORDER BY items.sort_order, items.created_at, items.id`,
-    [bom.id]
-  );
   const allItems = itemsResult.rows;
 
+  // Group items by section_id in one pass instead of re-scanning the
+  // full item list once per section (was O(sections x items)).
+  const itemsBySection = new Map();
+  for (const item of allItems) {
+    const bucket = itemsBySection.get(item.section_id);
+    if (bucket) bucket.push(item);
+    else itemsBySection.set(item.section_id, [item]);
+  }
   const sectionsWithItems = sections.map((s) => ({
     ...s,
-    items: allItems.filter((i) => i.section_id === s.id),
+    items: itemsBySection.get(s.id) || [],
   }));
 
   const totals = calculateTotals(allItems, bom.tax_rate);
@@ -151,22 +162,16 @@ bomsRouter.patch("/:bomId/sections/reorder", asyncHandler(async (req, res) => {
   ]);
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    for (let i = 0; i < orderedIds.length; i++) {
-      await client.query(
-        "UPDATE sections SET sort_order = $1 WHERE id = $2 AND bom_id = $3",
-        [i, orderedIds[i], req.params.bomId]
-      );
-    }
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
-  }
+  // Single statement instead of one UPDATE per row -- unnest() zips the
+  // id list against its own index, so a 50-row reorder is one round trip
+  // to Neon instead of 50 sequential ones.
+  await pool.query(
+    `UPDATE sections SET sort_order = data.new_order
+     FROM (SELECT id, ord - 1 AS new_order
+           FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord)) AS data
+     WHERE sections.id = data.id AND sections.bom_id = $2`,
+    [orderedIds, req.params.bomId]
+  );
   res.status(204).send();
 }));
 
@@ -239,20 +244,30 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
     );
     const newSection = sectionResult.rows[0];
 
-    const createdItems = [];
-    let itemSortOrder = 0;
-    for (const item of section.items) {
-      const itemResult = await pool.query(
+    let createdItems = [];
+    if (section.items.length) {
+      // One multi-row insert for the whole section instead of one
+      // round trip per item -- a sheet with a few hundred rows used to
+      // mean a few hundred sequential queries.
+      const names = section.items.map((i) => i.name);
+      const urls = section.items.map((i) => i.url ?? null);
+      const qtys = section.items.map((i) => i.qty);
+      const sortOrders = section.items.map((_, i) => i);
+      const itemsResult = await pool.query(
         `INSERT INTO items (section_id, name, url, qty, sort_order, status)
-         VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *`,
-        [newSection.id, item.name, item.url, item.qty, itemSortOrder++]
+         SELECT $1, data.name, data.url, data.qty, data.sort_order, 'pending'
+         FROM unnest($2::text[], $3::text[], $4::numeric[], $5::int[])
+              AS data(name, url, qty, sort_order)
+         RETURNING *`,
+        [newSection.id, names, urls, qtys, sortOrders]
       );
-      const newItem = itemResult.rows[0];
-      createdItems.push(newItem);
-      if (newItem.url) {
-        triggerScrape(newItem.id, newItem.url).catch((e) =>
-          console.error("scrape trigger failed", e)
-        );
+      createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
+      for (const newItem of createdItems) {
+        if (newItem.url) {
+          triggerScrape(newItem.id, newItem.url).catch((e) =>
+            console.error("scrape trigger failed", e)
+          );
+        }
       }
     }
     createdSections.push({ ...newSection, items: createdItems });
@@ -416,22 +431,13 @@ bomsRouter.patch("/sections/:sectionId/items/reorder", asyncHandler(async (req, 
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: "orderedIds must be a non-empty array" });
   }
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    for (let i = 0; i < orderedIds.length; i++) {
-      await client.query(
-        "UPDATE items SET sort_order = $1 WHERE id = $2 AND section_id = $3",
-        [i, orderedIds[i], req.params.sectionId]
-      );
-    }
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
-  }
+  await pool.query(
+    `UPDATE items SET sort_order = data.new_order
+     FROM (SELECT id, ord - 1 AS new_order
+           FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord)) AS data
+     WHERE items.id = data.id AND items.section_id = $2`,
+    [orderedIds, req.params.sectionId]
+  );
   res.status(204).send();
 }));
 
