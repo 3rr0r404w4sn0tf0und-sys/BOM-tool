@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, memo } from "react";
 import CaptchaSolver from "./CaptchaSolver.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip, IconSmiley } from "./Icons.jsx";
@@ -273,7 +273,14 @@ function CostCell({ item, theme, token, onResolved }) {
 // undo/redo command, and fire the API call in the background -- instead
 // of this component doing its own fetch-then-reload-everything, which is
 // what caused the lag on every single row action.
-export default function SectionTable({
+//
+// Wrapped in React.memo: all the callback props App passes down now have
+// a stable identity across renders (see useCallback usage in App.jsx), and
+// unrelated sections keep the same `section` object reference too (App's
+// setSections only replaces the one section that actually changed) -- so
+// with a BOM that has many tables, editing one row no longer re-renders
+// every other table on the page.
+function SectionTable({
   section,
   theme,
   token,
@@ -285,8 +292,10 @@ export default function SectionTable({
   onRenameSection,
   onDeleteTable,
   onChangeEmoji,
-  sectionDragHandleProps,
-  sectionDropProps,
+  onSectionDragStart,
+  onSectionDragOver,
+  onSectionDrop,
+  onSectionDragEnd,
   isSectionDragOver,
 }) {
   const [rowMenu, setRowMenu] = useState(null);
@@ -296,10 +305,20 @@ export default function SectionTable({
   const [dragItemId, setDragItemId] = useState(null);
   const [dragOverItemId, setDragOverItemId] = useState(null);
 
+  const sectionDragHandleProps = {
+    draggable: true,
+    onDragStart: (e) => onSectionDragStart(e, section.id),
+  };
+  const sectionDropProps = {
+    onDragOver: (e) => onSectionDragOver(e, section.id),
+    onDrop: (e) => onSectionDrop(e, section.id),
+    onDragEnd: onSectionDragEnd,
+  };
+
   function commitTitle() {
     setTitleEditing(false);
     const next = titleDraft.trim();
-    if (next && next !== section.title) onRenameSection(next);
+    if (next && next !== section.title) onRenameSection(section.id, next);
   }
 
   function onRowDragStart(e, itemId) {
@@ -329,7 +348,7 @@ export default function SectionTable({
     if (fromIdx === -1 || toIdx === -1) return;
     ids.splice(fromIdx, 1);
     ids.splice(toIdx, 0, draggedId);
-    onReorderItems(ids);
+    onReorderItems(section.id, ids);
   }
 
   const colHeader = {
@@ -361,8 +380,8 @@ export default function SectionTable({
           x: e.clientX,
           y: e.clientY,
           items: [
-            { label: "Add row", icon: IconPlus, onClick: onAddRow },
-            { label: "Delete table", icon: IconTrash, onClick: onDeleteTable, danger: true },
+            { label: "Add row", icon: IconPlus, onClick: () => onAddRow(section.id) },
+            { label: "Delete table", icon: IconTrash, onClick: () => onDeleteTable(section.id), danger: true },
           ],
         });
       }}
@@ -402,11 +421,11 @@ export default function SectionTable({
               <IconPencil size={12} color={theme.muted} />
             </button>
           )}
-          <EmojiPicker theme={theme} value={section.emoji} onChange={onChangeEmoji} />
+          <EmojiPicker theme={theme} value={section.emoji} onChange={(e) => onChangeEmoji(section.id, e)} />
         </div>
 
         <button
-          onClick={onDeleteTable}
+          onClick={() => onDeleteTable(section.id)}
           title="Delete table"
           style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted }}
         >
@@ -440,8 +459,8 @@ export default function SectionTable({
                   x: e.clientX,
                   y: e.clientY,
                   items: [
-                    { label: "Add row below", icon: IconPlus, onClick: onAddRow },
-                    { label: "Delete row", icon: IconTrash, onClick: () => onDeleteRow(item.id), danger: true },
+                    { label: "Add row below", icon: IconPlus, onClick: () => onAddRow(section.id) },
+                    { label: "Delete row", icon: IconTrash, onClick: () => onDeleteRow(section.id, item.id), danger: true },
                   ],
                 });
               }}
@@ -469,7 +488,7 @@ export default function SectionTable({
                   placeholder="paste a link…"
                   theme={theme}
                   mono
-                  onCommit={(v) => onPatchItem(item.id, { url: v, status: "pending" })}
+                  onCommit={(v) => onPatchItem(section.id, item.id, { url: v, status: "pending" })}
                 />
               </td>
               <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
@@ -477,7 +496,7 @@ export default function SectionTable({
                   value={item.name}
                   placeholder="item name"
                   theme={theme}
-                  onCommit={(v) => onPatchItem(item.id, { name: v })}
+                  onCommit={(v) => onPatchItem(section.id, item.id, { name: v })}
                 />
               </td>
               <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
@@ -488,7 +507,7 @@ export default function SectionTable({
                   align="right"
                   onCommit={(v) => {
                     const n = parseInt(v, 10);
-                    onPatchItem(item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
+                    onPatchItem(section.id, item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
                   }}
                 />
               </td>
@@ -497,7 +516,7 @@ export default function SectionTable({
               </td>
               <td style={{ padding: "2px 4px" }}>
                 <button
-                  onClick={() => onDeleteRow(item.id)}
+                  onClick={() => onDeleteRow(section.id, item.id)}
                   title="Delete row"
                   style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted, opacity: 0.6 }}
                   onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
@@ -512,7 +531,7 @@ export default function SectionTable({
       </table>
 
       <button
-        onClick={onAddRow}
+        onClick={() => onAddRow(section.id)}
         style={{
           width: "100%",
           display: "flex",
@@ -538,3 +557,5 @@ export default function SectionTable({
     </div>
   );
 }
+
+export default memo(SectionTable);

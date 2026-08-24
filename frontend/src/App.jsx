@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
@@ -148,30 +148,39 @@ export default function App() {
   const theme = getTheme(themeName);
   const history = useUndoRedo();
 
+  // Mirrors the latest `bom` without needing to list it as a dependency
+  // of every callback below -- that's what lets addRow/deleteRow/etc keep
+  // one stable function identity for the whole session instead of a new
+  // one every render, which is what React.memo on SectionTable needs to
+  // actually skip re-rendering sections that didn't change.
+  const bomRef = useRef(bom);
+  useEffect(() => {
+    bomRef.current = bom;
+  }, [bom]);
+
   // Applies a local edit to bom.sections and recomputes totals from it --
   // this is what lets add/delete/edit/reorder feel instant instead of
   // waiting on a full loadBom() round trip after every action.
-  function setSections(updater) {
+  const setSections = useCallback((updater) => {
     setBom((prev) => {
       if (!prev) return prev;
       const sections = updater(prev.sections);
       return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
     });
-  }
+  }, []);
 
-  function authHeaders(extra) {
-    return { Authorization: `Bearer ${token}`, ...(extra || {}) };
-  }
-  function jsonHeaders() {
-    return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-  }
+  const authHeaders = useCallback((extra) => ({ Authorization: `Bearer ${token}`, ...(extra || {}) }), [token]);
+  const jsonHeaders = useCallback(() => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }), [token]);
 
   // --- Row (item) mutations: optimistic local update + undo/redo command,
   // API call fired in the background. All rely on soft-delete/restore on
   // the backend so ids never change across undo/redo, however many times
-  // a row gets deleted and brought back. ---
+  // a row gets deleted and brought back. Each is wrapped in useCallback
+  // with a stable dependency list (token, and the stable helpers above)
+  // -- they read the live BOM via bomRef instead of closing over `bom`,
+  // so their identity never changes and SectionTable's React.memo holds. ---
 
-  async function addRow(sectionId) {
+  const addRow = useCallback(async (sectionId) => {
     const res = await fetch(`${API_URL}/api/boms/sections/${sectionId}/items`, {
       method: "POST",
       headers: jsonHeaders(),
@@ -189,10 +198,10 @@ export default function App() {
         fetch(`${API_URL}/api/boms/items/${item.id}/restore`, { method: "POST", headers: authHeaders() });
       },
     });
-  }
+  }, [jsonHeaders, authHeaders, setSections, history]);
 
-  function deleteRow(sectionId, itemId) {
-    const section = bom.sections.find((s) => s.id === sectionId);
+  const deleteRow = useCallback((sectionId, itemId) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
     const index = section.items.findIndex((i) => i.id === itemId);
     const removedItem = section.items[index];
     if (!removedItem) return;
@@ -212,10 +221,10 @@ export default function App() {
     }
     apply();
     history.push({ undo: revert, redo: apply });
-  }
+  }, [authHeaders, setSections, history]);
 
-  function patchItem(sectionId, itemId, patch) {
-    const section = bom.sections.find((s) => s.id === sectionId);
+  const patchItem = useCallback((sectionId, itemId, patch) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
     const item = section?.items.find((i) => i.id === itemId);
     if (!item) return;
     const before = {};
@@ -227,10 +236,10 @@ export default function App() {
     }
     apply(patch);
     history.push({ undo: () => apply(before), redo: () => apply(patch) });
-  }
+  }, [jsonHeaders, setSections, history]);
 
-  function reorderItems(sectionId, orderedIds) {
-    const section = bom.sections.find((s) => s.id === sectionId);
+  const reorderItems = useCallback((sectionId, orderedIds) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
     const prevOrder = section.items.map((i) => i.id);
 
     function apply(ids) {
@@ -247,13 +256,13 @@ export default function App() {
     }
     apply(orderedIds);
     history.push({ undo: () => apply(prevOrder), redo: () => apply(orderedIds) });
-  }
+  }, [jsonHeaders, setSections, history]);
 
   // --- Table (section) mutations ---
 
-  function deleteTable(sectionId) {
-    const index = bom.sections.findIndex((s) => s.id === sectionId);
-    const removedSection = bom.sections[index];
+  const deleteTable = useCallback((sectionId) => {
+    const index = bomRef.current.sections.findIndex((s) => s.id === sectionId);
+    const removedSection = bomRef.current.sections[index];
     if (!removedSection) return;
 
     function apply() {
@@ -273,10 +282,10 @@ export default function App() {
     }
     apply();
     history.push({ undo: revert, redo: apply });
-  }
+  }, [authHeaders, history]);
 
-  function renameSection(sectionId, title) {
-    const section = bom.sections.find((s) => s.id === sectionId);
+  const renameSection = useCallback((sectionId, title) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
     if (!section) return;
     const before = section.title;
 
@@ -286,10 +295,10 @@ export default function App() {
     }
     apply(title);
     history.push({ undo: () => apply(before), redo: () => apply(title) });
-  }
+  }, [jsonHeaders, setSections, history]);
 
-  function setSectionEmoji(sectionId, emoji) {
-    const section = bom.sections.find((s) => s.id === sectionId);
+  const setSectionEmoji = useCallback((sectionId, emoji) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
     if (!section) return;
     const before = section.emoji ?? null;
 
@@ -299,10 +308,10 @@ export default function App() {
     }
     apply(emoji);
     history.push({ undo: () => apply(before), redo: () => apply(emoji) });
-  }
+  }, [jsonHeaders, setSections, history]);
 
-  function reorderSections(orderedIds) {
-    const prevOrder = bom.sections.map((s) => s.id);
+  const reorderSections = useCallback((orderedIds) => {
+    const prevOrder = bomRef.current.sections.map((s) => s.id);
 
     function apply(ids) {
       setBom((prev) => {
@@ -310,7 +319,7 @@ export default function App() {
         const sections = ids.map((id) => byId[id]).filter(Boolean);
         return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
       });
-      fetch(`${API_URL}/api/boms/${bom.id}/sections/reorder`, {
+      fetch(`${API_URL}/api/boms/${bomRef.current.id}/sections/reorder`, {
         method: "PATCH",
         headers: jsonHeaders(),
         body: JSON.stringify({ orderedIds: ids }),
@@ -318,33 +327,37 @@ export default function App() {
     }
     apply(orderedIds);
     history.push({ undo: () => apply(prevOrder), redo: () => apply(orderedIds) });
-  }
+  }, [jsonHeaders, history]);
 
-  function onSectionDragStart(e, sectionId) {
+  const onSectionDragStart = useCallback((e, sectionId) => {
     setDragSectionId(sectionId);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", sectionId);
-  }
-  function onSectionDragOver(e, sectionId) {
+  }, []);
+  const onSectionDragOver = useCallback((e, sectionId) => {
     if (!dragSectionId || dragSectionId === sectionId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    if (dragOverSectionId !== sectionId) setDragOverSectionId(sectionId);
-  }
-  function onSectionDrop(e, targetSectionId) {
+    setDragOverSectionId((over) => (over === sectionId ? over : sectionId));
+  }, [dragSectionId]);
+  const onSectionDragEnd = useCallback(() => {
+    setDragSectionId(null);
+    setDragOverSectionId(null);
+  }, []);
+  const onSectionDrop = useCallback((e, targetSectionId) => {
     e.preventDefault();
     const draggedId = dragSectionId;
     setDragSectionId(null);
     setDragOverSectionId(null);
     if (!draggedId || draggedId === targetSectionId) return;
-    const ids = bom.sections.map((s) => s.id);
+    const ids = bomRef.current.sections.map((s) => s.id);
     const fromIdx = ids.indexOf(draggedId);
     const toIdx = ids.indexOf(targetSectionId);
     if (fromIdx === -1 || toIdx === -1) return;
     ids.splice(fromIdx, 1);
     ids.splice(toIdx, 0, draggedId);
     reorderSections(ids);
-  }
+  }, [dragSectionId, reorderSections]);
 
   function persistToken(t) {
     try {
@@ -643,7 +656,7 @@ export default function App() {
   // Quiet refetch used by the auto-poll below -- same as loadBom but
   // skips the openingBomId flicker since this runs silently in the
   // background, not from the user clicking to open a BOM.
-  async function pollBomQuietly(id) {
+  const pollBomQuietly = useCallback(async (id) => {
     try {
       const res = await fetch(`${API_URL}/api/boms/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -652,7 +665,13 @@ export default function App() {
     } catch {
       // network hiccup mid-poll -- just try again on the next tick
     }
-  }
+  }, [token]);
+
+  // Stable no-arg callback for SectionTable's onResolved prop -- reads the
+  // live BOM id via bomRef so it doesn't need `bom` in its deps.
+  const onItemResolved = useCallback(() => {
+    if (bomRef.current) pollBomQuietly(bomRef.current.id);
+  }, [pollBomQuietly]);
 
   // Auto-refresh: as long as the open BOM has any item still "pending"
   // (freshly added, or mid-scrape from a manual/bulk refresh), keep
@@ -1354,24 +1373,19 @@ export default function App() {
                 section={section}
                 theme={theme}
                 token={token}
-                onResolved={() => pollBomQuietly(bom.id)}
-                onAddRow={() => addRow(section.id)}
-                onDeleteRow={(itemId) => deleteRow(section.id, itemId)}
-                onPatchItem={(itemId, patch) => patchItem(section.id, itemId, patch)}
-                onReorderItems={(orderedIds) => reorderItems(section.id, orderedIds)}
-                onRenameSection={(title) => renameSection(section.id, title)}
-                onChangeEmoji={(emoji) => setSectionEmoji(section.id, emoji)}
-                onDeleteTable={() => deleteTable(section.id)}
+                onResolved={onItemResolved}
+                onAddRow={addRow}
+                onDeleteRow={deleteRow}
+                onPatchItem={patchItem}
+                onReorderItems={reorderItems}
+                onRenameSection={renameSection}
+                onChangeEmoji={setSectionEmoji}
+                onDeleteTable={deleteTable}
                 isSectionDragOver={dragOverSectionId === section.id}
-                sectionDragHandleProps={{
-                  draggable: true,
-                  onDragStart: (e) => onSectionDragStart(e, section.id),
-                }}
-                sectionDropProps={{
-                  onDragOver: (e) => onSectionDragOver(e, section.id),
-                  onDrop: (e) => onSectionDrop(e, section.id),
-                  onDragEnd: () => { setDragSectionId(null); setDragOverSectionId(null); },
-                }}
+                onSectionDragStart={onSectionDragStart}
+                onSectionDragOver={onSectionDragOver}
+                onSectionDrop={onSectionDrop}
+                onSectionDragEnd={onSectionDragEnd}
               />
             ))}
 
