@@ -13,6 +13,7 @@ import requests
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape
 from apify_generic_scrape import try_apify_generic_scrape
+from apify_mouser_scrape import try_apify_mouser_scrape
 
 # Domains confirmed to block/starve a plain self-hosted headless
 # Playwright browser (WAF fingerprinting or async-content withholding)
@@ -20,6 +21,14 @@ from apify_generic_scrape import try_apify_generic_scrape
 # as new domains are confirmed to have the same problem; don't add
 # speculatively, since each Apify call costs credits.
 APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
+
+# mouser.com specifically has a dedicated Actor (crawloop/mouser-product-
+# scraper) that talks to Mouser's own data layer instead of screen-
+# scraping the rendered page -- more reliable than the generic Puppeteer
+# path below, which can still get WAF-blocked even from Apify's own
+# infrastructure. Tried first for Mouser; falls back to the generic path,
+# then plain Playwright, same as every other route here.
+APIFY_MOUSER_DOMAINS = ("mouser.com",)
 
 
 def main():
@@ -37,6 +46,18 @@ def main():
             result = try_apify_scrape(url)
             if not result.get("found"):
                 print(f"Apify failed ({result.get('error')}), trying Playwright directly")
+                result = get_price(url)
+        elif any(domain in url for domain in APIFY_MOUSER_DOMAINS):
+            # Mouser: try the dedicated Mouser Actor first (talks to
+            # Mouser's own data layer, sidesteps the Akamai block
+            # entirely), then the generic Puppeteer scrape, then plain
+            # Playwright as a last resort.
+            result = try_apify_mouser_scrape(url)
+            if not result.get("found"):
+                print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
+                result = try_apify_generic_scrape(url)
+            if not result.get("found"):
+                print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright directly")
                 result = get_price(url)
         elif any(domain in url for domain in APIFY_GENERIC_DOMAINS):
             # Known WAF-blocked distributor sites: try Apify's generic
