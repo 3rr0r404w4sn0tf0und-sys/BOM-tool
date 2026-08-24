@@ -1,7 +1,42 @@
 import React, { useState } from "react";
-import { IconCopy, IconCheck } from "./Icons.jsx";
+import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+// Google Apps Script snippet -- pulls the flat "links" feed into a sheet
+// via =BOM_ROWS(). Copied as-is, key baked in, nothing for the user to edit.
+function sheetsScript(linksUrl) {
+  return `function BOM_ROWS() {
+  var res = UrlFetchApp.fetch("${linksUrl}");
+  var data = JSON.parse(res.getContentText());
+  return data.rows.map(function (r) {
+    return [r.item, r.price, r.link || ""];
+  });
+}`;
+}
+
+// Odoo server action -- pulls the formatted feed and logs one note per row
+// against a record. Meant to be copy/pasted straight into a Scheduled
+// Action's "Execute Python Code" box.
+function odooScript(cleanUrl) {
+  return `import requests
+
+resp = requests.get("${cleanUrl}", timeout=15)
+resp.raise_for_status()
+data = resp.json()
+
+Note = env["mail.message"].sudo()
+for section in data["sections"]:
+    for row in section["rows"]:
+        Note.create({
+            "model": "res.partner",
+            "res_id": record.id,
+            "body": "%s x%s - %s" % (row["item"], row["qty"], row["price"]),
+            "message_type": "comment",
+        })
+# Swap the mail.message block above for whatever Odoo model
+# (purchase.order.line, product.template, ...) this BOM should sync into.`;
+}
 
 function CopyRow({ label, value, theme }) {
   const [copied, setCopied] = useState(false);
@@ -12,7 +47,7 @@ function CopyRow({ label, value, theme }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // clipboard API unavailable -- the text is still selectable/visible below
+      // clipboard API unavailable -- nothing else to fall back to here
     }
   }
 
@@ -46,10 +81,67 @@ function CopyRow({ label, value, theme }) {
   );
 }
 
-export default function ApiModal({ bom, theme, onClose }) {
+// A named integration block: one line of description + a single "Copy code"
+// button. No raw code shown in the UI -- clicking it just puts the whole
+// working snippet on the clipboard.
+function CopyCodeButton({ label, getCode, theme }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(getCode());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard API unavailable
+    }
+  }
+
+  return (
+    <button
+      onClick={copy}
+      style={{
+        display: "flex", alignItems: "center", gap: 8,
+        background: theme.bg,
+        border: `1px solid ${theme.border}`, borderRadius: 8,
+        padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+        color: copied ? theme.okText : theme.text, width: "100%", textAlign: "left",
+      }}
+    >
+      {copied ? <IconCheck size={14} color={theme.okText} /> : <IconCopy size={14} color={theme.muted} />}
+      {copied ? "Copied!" : label}
+    </button>
+  );
+}
+
+export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
+  const [regenerating, setRegenerating] = useState(false);
+  const [confirmingRegen, setConfirmingRegen] = useState(false);
+  const [regenError, setRegenError] = useState(null);
+
   const key = bom.public_api_key;
   const cleanUrl = `${API_URL}/api/public/bom-clean?api_key=${key}`;
   const linksUrl = `${API_URL}/api/public/bom-links?api_key=${key}`;
+
+  async function regenerateKey() {
+    setRegenerating(true);
+    setRegenError(null);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API_URL}/api/boms/${bom.id}/regenerate-key`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Failed to generate a new key");
+      const updated = await res.json();
+      onKeyRegenerated?.(updated);
+      setConfirmingRegen(false);
+    } catch (e) {
+      setRegenError(e.message || "Failed to generate a new key");
+    } finally {
+      setRegenerating(false);
+    }
+  }
 
   return (
     <div
@@ -96,39 +188,76 @@ export default function ApiModal({ bom, theme, onClose }) {
         <CopyRow label="Formatted (sections, totals, bold/italic) — for docs/reports" value={cleanUrl} theme={theme} />
         <CopyRow label="Flat rows (item, price, link) — for spreadsheets" value={linksUrl} theme={theme} />
 
+        <div style={{ marginTop: -4, marginBottom: 4 }}>
+          {!confirmingRegen ? (
+            <button
+              onClick={() => setConfirmingRegen(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, border: "none", background: "none",
+                cursor: "pointer", fontSize: 12, fontWeight: 600, color: theme.muted, padding: 0,
+              }}
+            >
+              <IconRefresh size={12} color={theme.muted} />
+              Key compromised? Generate a new one
+            </button>
+          ) : (
+            <div
+              style={{
+                background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8,
+                padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 12.5, color: theme.text, lineHeight: 1.5 }}>
+                This immediately deletes the current key and replaces it with a new one. The old key stops
+                working right away — any embed, sheet, or Odoo automation using it will need updating.
+              </div>
+              {regenError && (
+                <div style={{ fontSize: 12, color: theme.error || "#ff6b6b" }}>{regenError}</div>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={regenerateKey}
+                  disabled={regenerating}
+                  style={{
+                    flex: 1, border: "none", borderRadius: 6, padding: "7px 10px", fontSize: 12.5,
+                    fontWeight: 700, cursor: regenerating ? "default" : "pointer",
+                    background: theme.error || "#ff6b6b", color: "#fff", opacity: regenerating ? 0.7 : 1,
+                  }}
+                >
+                  {regenerating ? "Generating…" : "Yes, replace it"}
+                </button>
+                <button
+                  onClick={() => { setConfirmingRegen(false); setRegenError(null); }}
+                  disabled={regenerating}
+                  style={{
+                    flex: 1, border: `1px solid ${theme.border}`, borderRadius: 6, padding: "7px 10px",
+                    fontSize: 12.5, fontWeight: 600, cursor: "pointer", background: "none", color: theme.text,
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div style={{ height: 1, background: theme.border, margin: "18px 0" }} />
 
         <h4 style={{ fontSize: 13, margin: "0 0 6px" }}>Google Sheets</h4>
         <p style={{ fontSize: 12.5, color: theme.subtleText, margin: "0 0 8px", lineHeight: 1.5 }}>
-          Extensions → Apps Script, paste this, then use <code>=BOM_ROWS()</code> in a cell:
+          In your sheet: Extensions → Apps Script → paste the copied code → Save. Back in the sheet, type{" "}
+          <code>=BOM_ROWS()</code> into any cell and it spills out item / price / link, one row per part.
         </p>
-        <pre
-          className="bom-api-modal-scroll"
-          style={{
-            background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 10,
-            fontSize: 11, overflowX: "auto", fontFamily: "monospace", color: theme.text, margin: "0 0 14px",
-          }}
-        >{`function BOM_ROWS() {
-  const res = UrlFetchApp.fetch("${linksUrl}");
-  const data = JSON.parse(res.getContentText());
-  return data.rows.map(r => [r.item, r.price, r.link]);
-}`}</pre>
+        <div style={{ marginBottom: 14 }}>
+          <CopyCodeButton label="Copy Apps Script code" getCode={() => sheetsScript(linksUrl)} theme={theme} />
+        </div>
 
         <h4 style={{ fontSize: 13, margin: "0 0 6px" }}>Odoo</h4>
         <p style={{ fontSize: 12.5, color: theme.subtleText, margin: "0 0 8px", lineHeight: 1.5 }}>
-          Call it from a Scheduled Action / server action (Settings → Technical → Automation):
+          Settings → Technical → Automation → Scheduled Actions → New. Set the model, choose "Execute Python Code,"
+          and paste the copied code into the code box — it logs one note per BOM row on the record.
         </p>
-        <pre
-          className="bom-api-modal-scroll"
-          style={{
-            background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: 10,
-            fontSize: 11, overflowX: "auto", fontFamily: "monospace", color: theme.text, margin: "0 0 4px",
-          }}
-        >{`import requests
-res = requests.get("${cleanUrl}", timeout=15)
-data = res.json()
-# data["sections"][i]["rows"] -> [{item, qty, price, ...}]
-# loop over rows to create/update Odoo records as needed`}</pre>
+        <CopyCodeButton label="Copy Odoo scheduled-action code" getCode={() => odooScript(cleanUrl)} theme={theme} />
       </div>
     </div>
   );

@@ -1311,7 +1311,19 @@ export default function App() {
               </p>
             )}
 
-            {showApiModal && <ApiModal bom={bom} theme={theme} onClose={() => setShowApiModal(false)} />}
+            {showApiModal && (
+              <ApiModal
+                bom={bom}
+                theme={theme}
+                onClose={() => setShowApiModal(false)}
+                onKeyRegenerated={(updated) => {
+                  setBom((prev) => (prev ? { ...prev, public_api_key: updated.public_api_key } : prev));
+                  setBomList((prev) =>
+                    prev ? prev.map((b) => (b.id === updated.id ? { ...b, public_api_key: updated.public_api_key } : b)) : prev
+                  );
+                }}
+              />
+            )}
 
             {bom.totals.staleCount > 0 && (
               <p style={{ color: theme.warnText, background: theme.warnBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>

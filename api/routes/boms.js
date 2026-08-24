@@ -84,6 +84,21 @@ bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
   res.json(result.rows[0]);
 }));
 
+// Rotate the public API key for this BOM. The old key is overwritten in
+// place (not just soft-invalidated), so as soon as this commits the old
+// key stops matching any row in Neon and every embed/integration using it
+// starts getting 401s until they're updated with the new one.
+bomsRouter.post("/:id/regenerate-key", asyncHandler(async (req, res) => {
+  const newKey = crypto.randomBytes(24).toString("hex");
+  const result = await pool.query(
+    `UPDATE boms SET public_api_key = $1, updated_at = now()
+     WHERE id = $2 AND user_id = $3 RETURNING *`,
+    [newKey, req.params.id, req.userId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  res.json(result.rows[0]);
+}));
+
 bomsRouter.delete("/:id", asyncHandler(async (req, res) => {
   await pool.query("DELETE FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.id,
