@@ -91,6 +91,7 @@ def try_apify_mouser_scrape(url: str) -> dict:
 
     run_input = {
         "productUrls": [url],
+        "proxyConfiguration": {"useApifyProxy": False},
     }
 
     try:
