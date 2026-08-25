@@ -31,8 +31,9 @@ function RefreshMenu({ theme, refreshingFilter, onSelect }) {
   const busy = !!refreshingFilter;
 
   const options = [
-    { key: "non-amazon", label: "Non-Amazon items" },
+    { key: "other", label: "Other items" },
     { key: "amazon", label: "Amazon items" },
+    { key: "mouser", label: "Mouser items" },
     { key: "all", label: "Everything" },
   ];
   const busyLabel = options.find((o) => o.key === refreshingFilter)?.label;
@@ -140,7 +141,7 @@ export default function App() {
   const [sheetImportError, setSheetImportError] = useState(null);
   const [sheetImportJustSucceeded, setSheetImportJustSucceeded] = useState(false);
   const sheetFileInputRef = useRef(null);
-  const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "non-amazon" | "all"
+  const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "mouser" | "other" | "all"
   const [taxRateEditing, setTaxRateEditing] = useState(false);
   const [taxRateDraft, setTaxRateDraft] = useState("");
   const [dragSectionId, setDragSectionId] = useState(null);

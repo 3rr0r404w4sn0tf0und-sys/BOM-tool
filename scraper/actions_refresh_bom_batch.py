@@ -2,15 +2,19 @@
 Entry point for .github/workflows/scrape-bom-batch.yml
 
 Scrapes every item in ONE specific BOM that matches FILTER
-("amazon" | "non-amazon" | "all") -- this is what the three refresh
+("amazon" | "mouser" | "other" | "all") -- this is what the refresh
 buttons on the BOM page trigger. One repository_dispatch, one Actions
 run, instead of firing a separate dispatch per item.
 
 Amazon items go through Apify first, falling back to direct Playwright
 (same order as the weekly Amazon job) and keep their last known price
-on total failure, flagged stale. Non-Amazon items use the plain
-get_price() scraper (same as the nightly job) and clear their price on
-failure, same as that job does.
+on total failure, flagged stale. Mouser items try the dedicated Mouser
+Actor first, then the generic Apify Puppeteer scrape, then direct
+Playwright (same order as actions_scrape_one.py / the weekly Mouser
+job), and also keep their last known price on total failure, flagged
+stale. Everything else ("other") uses the plain get_price() scraper
+(same as the nightly job) and clears its price on failure, same as that
+job does.
 """
 
 import os
@@ -21,8 +25,9 @@ import psycopg2.extras
 from scrape_logic import get_price, try_playwright_scrape
 from apify_scrape import try_apify_scrape
 from apify_generic_scrape import try_apify_generic_scrape
+from apify_mouser_scrape import try_apify_mouser_scrape
 
-# Pace Playwright fallback attempts so we don't hammer Amazon back to back.
+# Pace Playwright fallback attempts so we don't hammer sites back to back.
 DELAY_MIN = 5
 DELAY_MAX = 15
 
@@ -31,9 +36,18 @@ DELAY_MAX = 15
 # Playwright browser, routed through Apify's proxy infra first.
 APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 
+# mouser.com has a dedicated Actor (see apify_mouser_scrape.py) tried
+# ahead of the generic Puppeteer path -- keep in sync with
+# actions_scrape_one.py.
+APIFY_MOUSER_DOMAINS = ("mouser.com",)
+
 
 def is_amazon(url):
     return "amazon." in url
+
+
+def is_mouser(url):
+    return any(domain in url for domain in APIFY_MOUSER_DOMAINS)
 
 
 def is_apify_generic(url):
@@ -53,9 +67,13 @@ def main():
     if filt == "amazon":
         where += " AND items.url ILIKE %s"
         params.append("%amazon.%")
-    elif filt == "non-amazon":
-        where += " AND items.url NOT ILIKE %s"
+    elif filt == "mouser":
+        where += " AND items.url ILIKE %s"
+        params.append("%mouser.%")
+    elif filt == "other":
+        where += " AND items.url NOT ILIKE %s AND items.url NOT ILIKE %s"
         params.append("%amazon.%")
+        params.append("%mouser.%")
 
     cur.execute(
         f"""SELECT items.id, items.url FROM items
@@ -80,6 +98,15 @@ def main():
                     print(f"Apify failed ({result.get('error')}), trying Playwright")
                     time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
                     result = try_playwright_scrape(url)
+            elif is_mouser(url):
+                result = try_apify_mouser_scrape(url)
+                if not result.get("found"):
+                    print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
+                    result = try_apify_generic_scrape(url)
+                if not result.get("found"):
+                    print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright")
+                    time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
+                    result = try_playwright_scrape(url)
             elif is_apify_generic(url):
                 result = try_apify_generic_scrape(url)
                 if not result.get("found"):
@@ -101,9 +128,9 @@ def main():
             )
             refreshed += 1
         else:
-            if is_amazon(url):
-                # Keep the last known price for Amazon rather than nuking
-                # it -- same behavior as the weekly Amazon job.
+            if is_amazon(url) or is_mouser(url):
+                # Keep the last known price for Amazon/Mouser rather than
+                # nuking it -- same behavior as their dedicated weekly jobs.
                 cur.execute(
                     "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
                     (item_id,),

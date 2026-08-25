@@ -280,11 +280,11 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
 
 // POST /api/boms/:bomId/refresh-items
 // Bulk re-trigger scrapes for every item in this BOM that has a URL.
-// body: { filter: "amazon" | "non-amazon" | "all" } (defaults to "all")
+// body: { filter: "amazon" | "mouser" | "other" | "all" } (defaults to "all")
 // Reuses the same per-item scrape-on-demand workflow as a single manual
-// refresh -- that workflow (actions_scrape_one.py) already branches on
-// Amazon vs non-Amazon internally, this endpoint just decides which rows
-// to fire it for.
+// refresh -- that workflow (actions_refresh_bom_batch.py) already branches
+// on Amazon vs Mouser vs everything else internally, this endpoint just
+// decides which rows to fire it for.
 bomsRouter.post("/:bomId/refresh-items", asyncHandler(async (req, res) => {
   const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.bomId,
@@ -293,13 +293,14 @@ bomsRouter.post("/:bomId/refresh-items", asyncHandler(async (req, res) => {
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
 
   const filter = req.body?.filter || "all";
-  if (!["amazon", "non-amazon", "all"].includes(filter)) {
-    return res.status(400).json({ error: "filter must be 'amazon', 'non-amazon', or 'all'" });
+  if (!["amazon", "mouser", "other", "all"].includes(filter)) {
+    return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'other', or 'all'" });
   }
 
   let urlCondition = "";
   if (filter === "amazon") urlCondition = "AND items.url ILIKE '%amazon.%'";
-  else if (filter === "non-amazon") urlCondition = "AND items.url NOT ILIKE '%amazon.%'";
+  else if (filter === "mouser") urlCondition = "AND items.url ILIKE '%mouser.%'";
+  else if (filter === "other") urlCondition = "AND items.url NOT ILIKE '%amazon.%' AND items.url NOT ILIKE '%mouser.%'";
 
   // Mark everything that's about to be scraped as pending right away so
   // the UI shows the "pending…" state immediately instead of waiting for

@@ -1,11 +1,16 @@
 """
 Entry point for .github/workflows/nightly-refresh.yml
 
-Connects directly to Postgres and re-scrapes every NON-Amazon item that
-has a URL, every night. Amazon items are deliberately skipped here --
-they're handled by the separate weekly job (actions_refresh_amazon_weekly.py)
-since Amazon requests cost Apify credits and carry more blocking risk,
-so we don't want to hit them every single night.
+Connects directly to Postgres and re-scrapes every item that has a URL
+and isn't handled by a dedicated weekly/biweekly job, every night.
+Amazon items are skipped here -- handled by the separate biweekly job
+(actions_refresh_amazon_weekly.py). Mouser items are also skipped here --
+handled by the separate weekly job (actions_refresh_mouser_weekly.py).
+Both are pulled out of the nightly run for the same reason: they're
+expensive (Apify credits) and/or prone to getting blocked, so we don't
+want to hit them every single night -- and Mouser's dedicated Actor plus
+generic-scrape fallback route (used by the weekly job and the on-demand/
+batch scrapes) was timing out when squeezed into the nightly run anyway.
 """
 
 import os
@@ -17,7 +22,9 @@ from apify_generic_scrape import try_apify_generic_scrape
 
 # Keep in sync with actions_scrape_one.py -- domains confirmed to block/
 # starve a plain self-hosted headless Playwright browser, routed through
-# Apify's proxy infra first.
+# Apify's proxy infra first. (Mouser is excluded from the query below
+# entirely, since it now has its own dedicated weekly job -- this list
+# only matters for the remaining domains, e.g. Arrow.)
 APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 
 
@@ -37,10 +44,13 @@ def main():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute(
-        "SELECT id, url FROM items WHERE url IS NOT NULL AND url != '' AND url NOT ILIKE '%amazon.%'"
+        """SELECT id, url FROM items
+           WHERE url IS NOT NULL AND url != ''
+             AND url NOT ILIKE '%amazon.%'
+             AND url NOT ILIKE '%mouser.%'"""
     )
     rows = cur.fetchall()
-    print(f"Nightly refresh (non-Amazon): {len(rows)} items to check")
+    print(f"Nightly refresh (other items): {len(rows)} items to check")
 
     refreshed = 0
     failed = 0
