@@ -32,6 +32,8 @@ that.
 import os
 import psycopg2
 import psycopg2.extras
+import uuid
+from urllib.parse import urlparse
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape_batch
 from apify_generic_scrape import try_apify_generic_scrape_batch
@@ -41,26 +43,28 @@ SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
 
 def is_amazon(url):
-    return "amazon." in url
+    host = (urlparse(url).hostname or "").lower()
+    return host == "amazon.com" or host.endswith(".amazon.com") or host.startswith("amazon.")
 
 
 def is_mouser(url):
-    return "mouser.com" in url
+    host = (urlparse(url).hostname or "").lower()
+    return host == "mouser.com" or host.endswith(".mouser.com")
 
 
 def main():
     bom_id = os.environ["BOM_ID"]
     filt = os.environ.get("FILTER", "all")
+    job_id = os.environ["JOB_ID"]
 
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     where = (
-        "sections.bom_id = %s AND items.url IS NOT NULL AND items.url != '' "
-        f"AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"
+        "sections.bom_id = %s AND items.scrape_job_id = %s AND items.url IS NOT NULL AND items.url != '' "
     )
-    params = [bom_id]
+    params = [bom_id, job_id]
     if filt == "amazon":
         where += " AND items.url ILIKE %s"
         params.append("%amazon.%")
@@ -73,14 +77,13 @@ def main():
         params.append("%mouser.%")
 
     cur.execute(
-        f"""SELECT items.id, items.url FROM items
+        f"""SELECT items.id, items.url, items.scrape_job_id FROM items
             JOIN sections ON items.section_id = sections.id
             WHERE {where}""",
         params,
     )
     rows = cur.fetchall()
-    print(f"BOM batch refresh ({filt}) for bom {bom_id}: {len(rows)} items to check "
-          f"(skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
+    print(f"BOM batch refresh ({filt}) for bom {bom_id}: {len(rows)} items to check")
 
     if not rows:
         cur.close()
@@ -117,17 +120,17 @@ def main():
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s,
-                       last_checked = now(), stale_price = false
-                   WHERE id = %s""",
-                (result["price"], result.get("source"), item_id),
+                       last_checked = now(), stale_price = false, scrape_job_id = NULL
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (result["price"], result.get("source"), item_id, job_id),
             )
             refreshed += 1
         else:
             # Keep the last known price for Amazon/Mouser rather than
             # nuking it -- same behavior as their dedicated weekly jobs.
             cur.execute(
-                "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
-                (item_id,),
+                "UPDATE items SET status = CASE WHEN unit_price IS NULL THEN 'price_not_found' ELSE 'ok' END, stale_price = true, last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
+                (item_id, job_id),
             )
             failed += 1
 
@@ -142,9 +145,9 @@ def main():
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s,
-                       last_checked = now(), stale_price = false
-                   WHERE id = %s""",
-                (result["price"], result.get("source"), item_id),
+                       last_checked = now(), stale_price = false, scrape_job_id = NULL
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (result["price"], result.get("source"), item_id, job_id),
             )
             refreshed += 1
         else:
@@ -155,9 +158,9 @@ def main():
             )
             cur.execute(
                 """UPDATE items
-                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now()
-                   WHERE id = %s""",
-                (status, item_id),
+                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), scrape_job_id = NULL
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (status, item_id, job_id),
             )
             failed += 1
 

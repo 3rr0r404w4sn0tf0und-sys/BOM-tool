@@ -1,5 +1,6 @@
 import express from "express";
-import crypto from "crypto";
+import crypto from "node:crypto";
+
 import fetch from "node-fetch";
 import multer from "multer";
 import { pool } from "../db/pool.js";
@@ -8,6 +9,8 @@ import { calculateTotals } from "../db/totals.js";
 import { parseSheet } from "../lib/sheetImport.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { optionalString, optionalNumber, optionalBoolean } from "../lib/validation.js";
+import { validateProductUrl } from "../lib/urlValidation.js";
+import { triggerScrape, triggerBatchScrape } from "../lib/scrapeDispatcher.js";
 import rateLimit from "express-rate-limit";
 
 export const bomsRouter = express.Router();
@@ -292,141 +295,77 @@ bomsRouter.post("/sections/:sectionId/restore", asyncHandler(async (req, res) =>
 // are left untouched here -- items with a URL get a scrape kicked off the
 // same way manually-added items do, so price shows up shortly after.
 bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler(async (req, res) => {
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
-    req.params.bomId,
-    req.userId,
-  ]);
+  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
   let parsed;
-  try {
-    parsed = parseSheet(req.file.buffer);
-  } catch (e) {
+  try { parsed = parseSheet(req.file.buffer); }
+  catch (e) {
     console.error("Failed to parse uploaded sheet:", e);
     return res.status(400).json({ error: "Could not parse file. Supported: .xlsx, .xls, .csv" });
   }
+  if (!parsed.sections.length) return res.status(400).json({ error: "No sections or items found in that file" });
 
-  if (!parsed.sections.length) {
-    return res.status(400).json({ error: "No sections or items found in that file" });
-  }
-
-  const existingOrder = await pool.query(
-    "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1 AND deleted_at IS NULL",
-    [req.params.bomId]
-  );
-  let sortOrder = existingOrder.rows[0].max_order + 1;
-
-  const createdSections = [];
-  for (const section of parsed.sections) {
-    const sectionResult = await pool.query(
-      `INSERT INTO sections (bom_id, title, sort_order) VALUES ($1, $2, $3) RETURNING *`,
-      [req.params.bomId, section.title, sortOrder++]
+  const client = await pool.connect();
+  const scrapeTargets = [];
+  try {
+    await client.query("BEGIN");
+    const existingOrder = await client.query(
+      "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM sections WHERE bom_id = $1 AND deleted_at IS NULL",
+      [req.params.bomId]
     );
-    const newSection = sectionResult.rows[0];
+    let sortOrder = Number(existingOrder.rows[0].max_order) + 1;
+    const createdSections = [];
 
-    let createdItems = [];
-    if (section.items.length) {
-      // One multi-row insert for the whole section instead of one
-      // round trip per item -- a sheet with a few hundred rows used to
-      // mean a few hundred sequential queries.
-      const names = section.items.map((i) => i.name);
-      const urls = section.items.map((i) => i.url ?? null);
-      const qtys = section.items.map((i) => i.qty);
-      const sortOrders = section.items.map((_, i) => i);
-      const itemsResult = await pool.query(
-        `INSERT INTO items (section_id, name, url, qty, sort_order, status)
-         SELECT $1, data.name, data.url, data.qty, data.sort_order, 'pending'
-         FROM unnest($2::text[], $3::text[], $4::numeric[], $5::int[])
-              AS data(name, url, qty, sort_order)
-         RETURNING *`,
-        [newSection.id, names, urls, qtys, sortOrders]
+    for (const section of parsed.sections) {
+      const sectionResult = await client.query(
+        `INSERT INTO sections (bom_id, title, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+        [req.params.bomId, section.title, sortOrder++]
       );
-      createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
-      for (const newItem of createdItems) {
-        if (newItem.url) {
-          triggerScrape(newItem.id, newItem.url).catch((e) =>
-            console.error("scrape trigger failed", e)
-          );
-        }
+      const newSection = sectionResult.rows[0];
+      let createdItems = [];
+      if (section.items.length) {
+        const names = section.items.map((i) => i.name);
+        const urls = section.items.map((i) => i.url ?? null);
+        const qtys = section.items.map((i) => i.qty);
+        const sortOrders = section.items.map((_, i) => i);
+        const itemsResult = await client.query(
+          `INSERT INTO items (section_id, name, url, qty, sort_order, status)
+           SELECT $1, data.name, data.url, data.qty, data.sort_order, CASE WHEN data.url IS NULL OR data.url = '' THEN 'price_not_found' ELSE 'pending' END
+           FROM unnest($2::text[], $3::text[], $4::numeric[], $5::int[])
+             AS data(name, url, qty, sort_order) RETURNING *`,
+          [newSection.id, names, urls, qtys, sortOrders]
+        );
+        createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
+        for (const item of createdItems) if (item.url) scrapeTargets.push({ id: item.id, url: item.url });
       }
+      createdSections.push({ ...newSection, items: createdItems });
     }
-    createdSections.push({ ...newSection, items: createdItems });
+    await client.query("UPDATE boms SET updated_at = now() WHERE id = $1", [req.params.bomId]);
+    await client.query("COMMIT");
+    // Only dispatch scrapes after the import is committed, so a fast callback
+    // can never observe a half-imported BOM.
+    for (const target of scrapeTargets) {
+      triggerScrape(target.id, target.url).catch((e) => console.error("scrape trigger failed", e));
+    }
+    res.json({ sections: createdSections });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
   }
-
-  await pool.query("UPDATE boms SET updated_at = now() WHERE id = $1", [req.params.bomId]);
-
-  res.json({ sections: createdSections });
 }));
 
-// POST /api/boms/:bomId/refresh-items
-// Bulk re-trigger scrapes for every item in this BOM that has a URL.
-// body: { filter: "amazon" | "mouser" | "other" | "all" } (defaults to "all")
-// Reuses the same per-item scrape-on-demand workflow as a single manual
-// refresh -- that workflow (actions_refresh_bom_batch.py) already branches
-// on Amazon vs Mouser vs everything else internally, this endpoint just
-// decides which rows to fire it for.
 bomsRouter.post("/:bomId/refresh-items", scrapeLimiter, asyncHandler(async (req, res) => {
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
-    req.params.bomId,
-    req.userId,
-  ]);
+  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
-
   const filter = req.body?.filter || "all";
-  if (!["amazon", "mouser", "other", "all"].includes(filter)) {
-    return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'other', or 'all'" });
-  }
-
-  let urlCondition = "";
-  if (filter === "amazon") urlCondition = "AND items.url ILIKE '%amazon.%'";
-  else if (filter === "mouser") urlCondition = "AND items.url ILIKE '%mouser.%'";
-  else if (filter === "other") urlCondition = "AND items.url NOT ILIKE '%amazon.%' AND items.url NOT ILIKE '%mouser.%'";
-
-  // Mark everything that's about to be scraped as pending right away so
-  // the UI shows the "pending…" state immediately instead of waiting for
-  // the batch job to touch each row.
-  const pendingResult = await pool.query(
-    `UPDATE items SET status = 'pending'
-     FROM sections
-     WHERE items.section_id = sections.id
-       AND sections.bom_id = $1
-       AND items.url IS NOT NULL AND items.url != '' ${urlCondition}
-     RETURNING items.id`,
-    [req.params.bomId]
-  );
-
-  const ghRepo = process.env.GITHUB_REPO;
-  const ghToken = process.env.GITHUB_DISPATCH_TOKEN;
-  if (!ghRepo || !ghToken) {
-    console.error("GITHUB_REPO / GITHUB_DISPATCH_TOKEN not set, cannot trigger batch scrape");
-    return res.status(500).json({ error: "Scraper not configured on the server" });
-  }
-
-  try {
-    const resp = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ghToken}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        event_type: "bom-batch-scrape-request",
-        client_payload: { bom_id: req.params.bomId, filter },
-      }),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.error("GitHub batch dispatch failed:", resp.status, text);
-      return res.status(500).json({ error: "Failed to start batch refresh job" });
-    }
-  } catch (e) {
-    console.error("Failed to trigger GitHub Actions batch scrape:", e);
-    return res.status(500).json({ error: "Failed to start batch refresh job" });
-  }
-
-  res.json({ triggered: pendingResult.rows.length, filter });
+  if (!["amazon", "mouser", "other", "all"].includes(filter)) return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'other', or 'all'" });
+  const result = await triggerBatchScrape(req.params.bomId, filter);
+  if (!result) return res.status(500).json({ error: "Failed to start batch refresh job" });
+  res.json({ triggered: result.triggered, filter, job_id: result.jobId });
 }));
 
 // --- Items ---
@@ -434,7 +373,10 @@ bomsRouter.post("/:bomId/refresh-items", scrapeLimiter, asyncHandler(async (req,
 bomsRouter.post("/sections/:sectionId/items", asyncHandler(async (req, res) => {
   const name = validateBody(() => optionalString(req.body?.name, "name", 500), res);
   if (name === null) return;
-  const url = validateBody(() => optionalString(req.body?.url, "url", 4000), res);
+  const url = validateBody(() => {
+    const value = optionalString(req.body?.url, "url", 4000);
+    return value ? validateProductUrl(value) : value;
+  }, res);
   const qty = validateBody(() => optionalNumber(req.body?.qty, "qty", { min: 0, max: 100000000 }), res);
   const bold = validateBody(() => optionalBoolean(req.body?.bold, "bold"), res);
   const italic = validateBody(() => optionalBoolean(req.body?.italic, "italic"), res);
@@ -480,7 +422,10 @@ bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
   }
   const name = validateBody(() => optionalString(req.body?.name, "name", 500), res);
   if (name === null && req.body?.name !== undefined && req.body?.name !== null) return;
-  const url = validateBody(() => optionalString(req.body?.url, "url", 4000), res);
+  const url = validateBody(() => {
+    const value = optionalString(req.body?.url, "url", 4000);
+    return value ? validateProductUrl(value) : value;
+  }, res);
   if (url === null && req.body?.url !== undefined && req.body?.url !== null) return;
   const qty = validateBody(() => optionalNumber(req.body?.qty, "qty", { min: 0, max: 100000000 }), res);
   if (qty === null && req.body?.qty !== undefined && req.body?.qty !== null && req.body?.qty !== "") return;
@@ -488,37 +433,41 @@ bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
   const italic = validateBody(() => optionalBoolean(req.body?.italic, "italic"), res);
   const font_size = validateBody(() => optionalNumber(req.body?.font_size, "font_size", { min: 8, max: 96 }), res);
   const sort_order = validateBody(() => optionalNumber(req.body?.sort_order, "sort_order", { min: 0, max: 100000000 }), res);
-  const unit_price = validateBody(() => optionalNumber(req.body?.unit_price, "unit_price", { min: 0, max: 100000000000 }), res);
-  const status = validateBody(() => optionalString(req.body?.status, "status", 40), res);
   if (res.locals.validationFailed) return;
-  if (status !== null && !["pending", "ok", "link_failed", "price_not_found"].includes(status)) {
-    return res.status(400).json({ error: "status is invalid" });
-  }
+  const before = await pool.query("SELECT url FROM items WHERE id = $1", [req.params.itemId]);
+  const previousUrl = before.rows[0]?.url || null;
   const result = await pool.query(
     `UPDATE items SET
-       name = COALESCE($1, name),
-       url = COALESCE($2, url),
-       qty = COALESCE($3, qty),
-       bold = COALESCE($4, bold),
-       italic = COALESCE($5, italic),
-       font_size = COALESCE($6, font_size),
-       sort_order = COALESCE($7, sort_order),
-       unit_price = COALESCE($8, unit_price),
-       status = COALESCE($9, status)
-     WHERE id = $10 RETURNING *`,
-    [name, url, qty, bold, italic, font_size, sort_order, unit_price, status, req.params.itemId]
+       name = COALESCE($1, name), url = COALESCE($2, url), qty = COALESCE($3, qty),
+       bold = COALESCE($4, bold), italic = COALESCE($5, italic),
+       font_size = COALESCE($6, font_size), sort_order = COALESCE($7, sort_order),
+       status = CASE WHEN $2 IS NOT NULL AND $2 IS DISTINCT FROM url THEN 'pending' ELSE status END,
+       stale_price = CASE WHEN $2 IS NOT NULL AND $2 IS DISTINCT FROM url THEN false ELSE stale_price END
+     WHERE id = $8 RETURNING *`,
+    [name, url, qty, bold, italic, font_size, sort_order, req.params.itemId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   const item = result.rows[0];
-
-  // A URL was just set/changed via inline edit -- kick off a scrape right
-  // away instead of leaving the item stuck at its default "pending" status
-  // until someone notices and hits the manual refresh button.
-  if (url) {
+  if (url && url !== previousUrl) {
     triggerScrape(item.id, url).catch((e) => console.error("scrape trigger failed", e));
   }
-
   res.json(item);
+}));
+
+// Explicit manual-price endpoint. Scraper-owned fields cannot be forged through
+// the normal item PATCH endpoint. Manual prices are marked as manual so a later
+// scrape can safely replace them when the user refreshes the product.
+bomsRouter.patch("/items/:itemId/manual-price", asyncHandler(async (req, res) => {
+  if (!await getOwnedItem(req.params.itemId, req.userId)) return res.status(404).json({ error: "Item not found" });
+  const unit_price = validateBody(() => optionalNumber(req.body?.unit_price, "unit_price", { min: 0, max: 100000000000 }), res);
+  if (unit_price === null && req.body?.unit_price !== undefined && req.body?.unit_price !== null) return;
+  const result = await pool.query(
+    `UPDATE items SET unit_price = $1, status = CASE WHEN $1 IS NULL THEN 'price_not_found' ELSE 'ok' END,
+       source = CASE WHEN $1 IS NULL THEN NULL ELSE 'manual' END, stale_price = false, last_checked = now()
+     WHERE id = $2 RETURNING *`,
+    [unit_price ?? null, req.params.itemId]
+  );
+  res.json(result.rows[0]);
 }));
 
 bomsRouter.delete("/items/:itemId", asyncHandler(async (req, res) => {
@@ -561,141 +510,16 @@ bomsRouter.patch("/sections/:sectionId/items/reorder", asyncHandler(async (req, 
   res.status(204).send();
 }));
 
-// POST /api/boms/items/:itemId/request-captcha-refresh
-// User clicks "Solve CAPTCHA" on a stale Amazon item. Fires the special
-// CAPTCHA-aware workflow instead of the normal scrape-on-demand one.
-bomsRouter.post("/items/:itemId/request-captcha-refresh", scrapeLimiter, asyncHandler(async (req, res) => {
-  if (!await getOwnedItem(req.params.itemId, req.userId)) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-  const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
-    req.params.itemId,
-  ]);
-  const item = itemResult.rows[0];
-  if (!item) return res.status(404).json({ error: "Item not found" });
-  if (!item.url) return res.status(400).json({ error: "Item has no URL" });
-
-  await pool.query(
-    "UPDATE items SET captcha_status = 'awaiting_screenshot' WHERE id = $1",
-    [item.id]
-  );
-
-  const ghRepo = process.env.GITHUB_REPO;
-  const ghToken = process.env.GITHUB_DISPATCH_TOKEN;
-  try {
-    await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ghToken}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        event_type: "captcha-scrape-request",
-        client_payload: {
-          item_id: item.id,
-          url: item.url,
-          api_base_url: process.env.API_PUBLIC_URL,
-        },
-      }),
-    });
-  } catch (e) {
-    console.error("Failed to trigger CAPTCHA workflow:", e);
-    return res.status(500).json({ error: "Failed to start CAPTCHA-solve job" });
-  }
-
-  res.json({ status: "started", message: "Screenshot will appear in ~20-40s" });
-}));
-
-// GET /api/boms/items/:itemId/captcha
-// Frontend polls this while waiting for the screenshot to show up.
-bomsRouter.get("/items/:itemId/captcha", asyncHandler(async (req, res) => {
-  if (!await getOwnedItem(req.params.itemId, req.userId)) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-  const result = await pool.query(
-    "SELECT id, captcha_status, captcha_screenshot FROM items WHERE id = $1",
-    [req.params.itemId]
-  );
-  if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
-  res.json(result.rows[0]);
-}));
-
-// POST /api/boms/items/:itemId/captcha-solution
-// User types the CAPTCHA text and submits it here.
-bomsRouter.post("/items/:itemId/captcha-solution", asyncHandler(async (req, res) => {
-  if (!await getOwnedItem(req.params.itemId, req.userId)) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-  const { solution } = req.body;
-  if (!solution) return res.status(400).json({ error: "solution required" });
-
-  const result = await pool.query(
-    `UPDATE items SET captcha_solution = $1, captcha_status = 'solution_submitted'
-     WHERE id = $2 RETURNING id`,
-    [solution, req.params.itemId]
-  );
-  if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
-  res.json({ ok: true });
-}));
-
-// Manually re-trigger a scrape for one item (e.g. user clicks "refresh price")
+// Manually re-trigger a scrape for one item. Every trigger receives a unique
+// scrape_job_id; callbacks must present the same id, preventing an older
+// GitHub Actions run from overwriting a newer price.
 bomsRouter.post("/items/:itemId/refresh", scrapeLimiter, asyncHandler(async (req, res) => {
-  if (!await getOwnedItem(req.params.itemId, req.userId)) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-  const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [
-    req.params.itemId,
-  ]);
+  if (!await getOwnedItem(req.params.itemId, req.userId)) return res.status(404).json({ error: "Item not found" });
+  const itemResult = await pool.query("SELECT * FROM items WHERE id = $1", [req.params.itemId]);
   const item = itemResult.rows[0];
   if (!item) return res.status(404).json({ error: "Item not found" });
   if (!item.url) return res.status(400).json({ error: "Item has no URL to scrape" });
-
-  await triggerScrape(item.id, item.url);
-  res.json({ status: "pending", message: "Scrape triggered, check back in ~30-60s" });
+  const jobId = await triggerScrape(item.id, item.url);
+  if (!jobId) return res.status(503).json({ error: "Failed to start scrape job" });
+  res.json({ status: "pending", job_id: jobId, message: "Scrape triggered, check back in ~30-60s" });
 }));
-
-// Fires a GitHub Actions `repository_dispatch` event that runs a single
-// Playwright scrape in a fresh Actions VM (2 vCPU / 7GB, real browser,
-// no card, free for public repos). The workflow POSTs its result back to
-// /api/internal/scrape-result once done -- this function does NOT wait
-// for that; it just marks the item "pending" and kicks the job off.
-// Expect the price to show up ~20-60s later. See:
-//   .github/workflows/scrape-on-demand.yml
-async function triggerScrape(itemId, url) {
-  await pool.query("UPDATE items SET status = 'pending' WHERE id = $1", [itemId]);
-
-  const ghRepo = process.env.GITHUB_REPO; // e.g. "yourname/bom-tool"
-  const ghToken = process.env.GITHUB_DISPATCH_TOKEN; // PAT with repo scope
-
-  if (!ghRepo || !ghToken) {
-    console.error("GITHUB_REPO / GITHUB_DISPATCH_TOKEN not set, cannot trigger scrape");
-    await pool.query("UPDATE items SET status = 'price_not_found' WHERE id = $1", [itemId]);
-    return;
-  }
-
-  try {
-    const resp = await fetch(`https://api.github.com/repos/${ghRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ghToken}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        event_type: "scrape-request",
-        client_payload: {
-          item_id: itemId,
-          url,
-          callback_url: `${process.env.API_PUBLIC_URL}/api/internal/scrape-result`,
-        },
-      }),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.error("GitHub dispatch failed:", resp.status, text);
-    }
-  } catch (e) {
-    console.error("Failed to trigger GitHub Actions scrape:", e);
-  }
-}

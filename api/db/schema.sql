@@ -5,10 +5,12 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT,
     email_verified BOOLEAN NOT NULL DEFAULT false,
     verification_token TEXT,
     verification_token_expires TIMESTAMPTZ,
+    oauth_provider TEXT,
+    oauth_id TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -69,12 +71,9 @@ CREATE TABLE items (
     qty NUMERIC(10,2) NOT NULL DEFAULT 1,
     unit_price NUMERIC(12,2),            -- null if not yet scraped / failed
     status TEXT NOT NULL DEFAULT 'pending', -- pending | ok | link_failed | price_not_found
-    source TEXT,                         -- og_meta | json_ld | playwright | manual
-    stale_price BOOLEAN NOT NULL DEFAULT false, -- true when Amazon refresh failed and we kept the old price
-    captcha_status TEXT,                 -- null | awaiting_screenshot | needs_solution | solution_submitted
-    captcha_screenshot TEXT,             -- base64 PNG of the CAPTCHA, cleared once solved
-    captcha_solution TEXT,               -- user's typed answer, cleared once consumed
-    captcha_requested_at TIMESTAMPTZ,
+    source TEXT,                         -- og_meta | json_ld | pricing_table | apify | manual
+    stale_price BOOLEAN NOT NULL DEFAULT false, -- true when a protected-store refresh failed and the old price was kept
+    scrape_job_id UUID,                   -- active GitHub Actions scrape; callbacks must match it
     bold BOOLEAN NOT NULL DEFAULT false,
     italic BOOLEAN NOT NULL DEFAULT false,
     font_size INT NOT NULL DEFAULT 19,
@@ -92,3 +91,5 @@ CREATE INDEX idx_sections_bom_id ON sections(bom_id);
 CREATE INDEX idx_items_section_id ON items(section_id);
 CREATE INDEX idx_boms_user_id ON boms(user_id);
 CREATE INDEX idx_boms_api_key ON boms(public_api_key);
+CREATE INDEX idx_items_active_scrape_job ON items(scrape_job_id) WHERE scrape_job_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_users_oauth ON users(oauth_provider, oauth_id) WHERE oauth_provider IS NOT NULL;

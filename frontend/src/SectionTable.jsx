@@ -1,16 +1,7 @@
 import React, { useState, useEffect, useRef, memo } from "react";
-const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
-const apiFetch = (url, options = {}) => {
-  const headers = new Headers(options.headers || {});
-  const method = (options.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
-  return fetch(url, { ...options, headers, credentials: "include" });
-};
-import CaptchaSolver from "./CaptchaSolver.jsx";
+import { API_URL, apiFetch } from "./api.js";
 import ContextMenu from "./ContextMenu.jsx";
 import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip, IconSmiley } from "./Icons.jsx";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 // Common section emoji, grouped loosely by what people actually label
 // BOM tables with (electronics/hardware-flavored, since that's the app),
@@ -171,37 +162,21 @@ function EditableCell({ value, placeholder, onCommit, theme, align, mono }) {
   );
 }
 
-// Manual "refresh price" control. Fires POST /items/:id/refresh (which
-// works for Amazon too -- it tries Apify then falls back to Playwright,
-// same as the scheduled jobs) then polls the parent's onRefresh a few
-// times since the result comes back async via a GitHub Actions callback.
-function RefreshButton({ item, theme, token, onRefresh }) {
+// Manual "refresh price" control. The API starts an asynchronous GitHub Actions
+// scrape; the parent polling loop reconciles the returned price/status.
+function RefreshButton({ item, theme, onRefresh }) {
   const [firing, setFiring] = useState(false);
-  const pollRef = useRef(null);
-
-  useEffect(() => () => clearInterval(pollRef.current), []);
 
   async function fire() {
     if (firing) return;
     setFiring(true);
     try {
-      await apiFetch(`${API_URL}/api/boms/items/${item.id}/refresh`, {
-        method: "POST",
-        headers: { },
-      });
-    } catch {
-      // ignore -- polling below will just find nothing changed
-    }
-    onRefresh();
-    let checks = 0;
-    pollRef.current = setInterval(() => {
-      checks += 1;
+      const res = await apiFetch(`/api/boms/items/${item.id}/refresh`, { method: "POST" });
+      if (!res.ok) return;
       onRefresh();
-      if (checks >= 8) {
-        clearInterval(pollRef.current);
-        setFiring(false);
-      }
-    }, 4000);
+    } finally {
+      setFiring(false);
+    }
   }
 
   return (
@@ -216,12 +191,7 @@ function RefreshButton({ item, theme, token, onRefresh }) {
       onMouseEnter={(e) => !firing && (e.currentTarget.style.opacity = 1)}
       onMouseLeave={(e) => !firing && (e.currentTarget.style.opacity = 0.7)}
     >
-      <span
-        style={{
-          display: "flex",
-          animation: firing ? "bomToolSpin 900ms linear infinite" : "none",
-        }}
-      >
+      <span style={{ display: "flex", animation: firing ? "bomToolSpin 900ms linear infinite" : "none" }}>
         <style>{`@keyframes bomToolSpin { to { transform: rotate(360deg); } }`}</style>
         <IconRefresh size={12} color={theme.muted} />
       </span>
@@ -229,7 +199,7 @@ function RefreshButton({ item, theme, token, onRefresh }) {
   );
 }
 
-function CostCell({ item, theme, token, onResolved }) {
+function CostCell({ item, theme, onResolved }) {
   const lineTotal = Number(item.unit_price) * Number(item.qty ?? 1);
   if (item.status === "ok") {
     return (
@@ -248,9 +218,8 @@ function CostCell({ item, theme, token, onResolved }) {
               <IconWarning size={11} color={theme.warnText} /> stale
             </span>
           )}
-          {item.stale_price && <CaptchaSolver item={item} token={token} onResolved={onResolved} />}
         </div>
-        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
+        <RefreshButton item={item} theme={theme} onRefresh={onResolved} />
       </div>
     );
   }
@@ -260,7 +229,7 @@ function CostCell({ item, theme, token, onResolved }) {
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.muted }}>
           <IconClock size={12} color={theme.muted} /> pending…
         </span>
-        <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
+        <RefreshButton item={item} theme={theme} onRefresh={onResolved} />
       </div>
     );
   }
@@ -269,7 +238,7 @@ function CostCell({ item, theme, token, onResolved }) {
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.errText }}>
         <IconWarning size={12} color={theme.errText} /> failed
       </span>
-      <RefreshButton item={item} theme={theme} token={token} onRefresh={onResolved} />
+      <RefreshButton item={item} theme={theme} onRefresh={onResolved} />
     </div>
   );
 }
@@ -290,7 +259,6 @@ function CostCell({ item, theme, token, onResolved }) {
 function SectionTable({
   section,
   theme,
-  token,
   onResolved,
   onAddRow,
   onDeleteRow,
@@ -519,7 +487,7 @@ function SectionTable({
                 />
               </td>
               <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                <CostCell item={item} theme={theme} token={token} onResolved={onResolved} />
+                <CostCell item={item} theme={theme} onResolved={onResolved} />
               </td>
               <td style={{ padding: "2px 4px" }}>
                 <button

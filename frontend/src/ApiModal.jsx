@@ -1,14 +1,7 @@
 import React, { useState } from "react";
-const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
-const apiFetch = (url, options = {}) => {
-  const headers = new Headers(options.headers || {});
-  const method = (options.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
-  return fetch(url, { ...options, headers, credentials: "include" });
-};
+import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 // Google Apps Script snippet -- pulls the flat "links" feed into a sheet
 // via =BOM_ROWS(). Copied as-is, key baked in, nothing for the user to edit.

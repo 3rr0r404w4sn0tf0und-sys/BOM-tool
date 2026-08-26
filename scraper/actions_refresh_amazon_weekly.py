@@ -15,8 +15,8 @@ Non-Amazon items are still refreshed nightly by actions_refresh_all.py.
    before it even loads the first page, so batching is what actually
    cuts the wall-clock time down on a big refresh.
 3. Anything the Actor didn't find a price for keeps its last known
-   price and gets flagged stale_price = true. User can manually hit
-   "Solve CAPTCHA" from the BOM page any time.
+   price and gets flagged stale_price = true. Users can manually refresh
+   the item from the BOM page any time.
 
 No local Playwright/Puppeteer fallback anymore -- it duplicated what
 the Apify Actor already handles more reliably and was the main thing
@@ -26,12 +26,14 @@ slowing this down before batching, on top of the per-item overhead.
 import os
 import psycopg2
 import psycopg2.extras
+import uuid
 from apify_scrape import try_apify_scrape_batch
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
 
 def main():
+    job_id = str(uuid.uuid4())
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -50,6 +52,7 @@ def main():
         print("Nothing to do.")
         return
 
+    cur.execute("UPDATE items SET status = 'pending', stale_price = false, scrape_job_id = %s WHERE id = ANY(%s::uuid[])", (job_id, [r["id"] for r in rows]))
     urls = [row["url"] for row in rows]
     url_to_id = {row["url"]: row["id"] for row in rows}
 
@@ -65,16 +68,16 @@ def main():
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s, last_checked = now(),
-                       stale_price = false
-                   WHERE id = %s""",
-                (result["price"], result.get("source"), item_id),
+                       stale_price = false, scrape_job_id = NULL
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (result["price"], result.get("source"), item_id, job_id),
             )
             refreshed += 1
         else:
             print(f"{item_id}: Apify failed ({result.get('error')}), keeping last known price")
             cur.execute(
-                "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
-                (item_id,),
+                "UPDATE items SET status = CASE WHEN unit_price IS NULL THEN 'price_not_found' ELSE 'ok' END, stale_price = true, last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
+                (item_id, job_id),
             )
             stale += 1
 

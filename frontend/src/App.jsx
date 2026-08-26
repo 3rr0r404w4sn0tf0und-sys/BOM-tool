@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { API_URL, apiFetch } from "./api.js";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
@@ -10,15 +11,8 @@ import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
-const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
-const apiFetch = (url, options = {}) => {
-  const headers = new Headers(options.headers || {});
-  const method = (options.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
-  return fetch(url, { ...options, headers, credentials: "include" });
-};
+import { useBomPolling } from "./useBomPolling.js";
+import RefreshMenu from "./RefreshMenu.jsx";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
 const VERIFY_PENDING_SECONDS = 15;
@@ -28,93 +22,6 @@ const VERIFY_PENDING_SECONDS = 15;
 // the UI (rich text rows, emoji section titles, drag to reorder, etc.)
 // can be built against a known-working backend.
 
-// Consolidated "Refresh" dropdown -- one button instead of three, so the
-// BOM title always keeps its room in the toolbar. Smooth scale/opacity
-// open, closes on outside click, Escape, or after a selection.
-function RefreshMenu({ theme, refreshingFilter, onSelect }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
-  const busy = !!refreshingFilter;
-
-  const options = [
-    { key: "other", label: "Other items" },
-    { key: "amazon", label: "Amazon items" },
-    { key: "mouser", label: "Mouser items" },
-    { key: "all", label: "Everything" },
-  ];
-  const busyLabel = options.find((o) => o.key === refreshingFilter)?.label;
-
-  useEffect(() => {
-    function onDocClick(e) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    }
-    function onKey(e) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
-  return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        disabled={busy}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-          background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
-          cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
-        }}
-      >
-        <IconRefresh size={13} />
-        {busy ? `Refreshing ${busyLabel}…` : "Refresh"}
-        <span
-          style={{
-            fontSize: 9, marginLeft: -1, transform: open ? "rotate(180deg)" : "none",
-            transition: "transform 160ms ease",
-          }}
-        >
-          ▾
-        </span>
-      </button>
-
-      <div
-        style={{
-          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20,
-          background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10,
-          boxShadow: "0 10px 28px rgba(0,0,0,0.18)", minWidth: 180, overflow: "hidden",
-          transformOrigin: "top left",
-          opacity: open ? 1 : 0,
-          transform: open ? "scale(1) translateY(0)" : "scale(0.96) translateY(-4px)",
-          pointerEvents: open ? "auto" : "none",
-          transition: "opacity 150ms ease, transform 150ms ease",
-        }}
-      >
-        {options.map((o) => (
-          <button
-            key={o.key}
-            onClick={() => { setOpen(false); onSelect(o.key); }}
-            disabled={busy}
-            style={{
-              display: "block", width: "100%", textAlign: "left", padding: "10px 13px",
-              border: "none", background: "none", color: theme.text, fontSize: 13, fontWeight: 500,
-              cursor: busy ? "default" : "pointer",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = theme.rowBorder)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [token, setToken] = useState(null);
@@ -155,15 +62,10 @@ export default function App() {
   const theme = getTheme(themeName);
   const history = useUndoRedo();
 
-  // Mirrors the latest `bom` without needing to list it as a dependency
-  // of every callback below -- that's what lets addRow/deleteRow/etc keep
-  // one stable function identity for the whole session instead of a new
-  // one every render, which is what React.memo on SectionTable needs to
-  // actually skip re-rendering sections that didn't change.
+  // Stable live reference used by mutation callbacks so they can avoid
+  // closing over the whole BOM object and forcing every table to re-render.
   const bomRef = useRef(bom);
-  useEffect(() => {
-    bomRef.current = bom;
-  }, [bom]);
+  useEffect(() => { bomRef.current = bom; }, [bom]);
 
   // Applies a local edit to bom.sections and recomputes totals from it --
   // this is what lets add/delete/edit/reorder feel instant instead of
@@ -629,40 +531,17 @@ export default function App() {
     }
   }
 
-  // Quiet refetch used by the auto-poll below -- same as loadBom but
-  // skips the openingBomId flicker since this runs silently in the
-  // background, not from the user clicking to open a BOM.
-  const pollBomQuietly = useCallback(async (id) => {
-    try {
-      const res = await apiFetch(`${API_URL}/api/boms/${id}`, {
-        headers: { },
-      });
-      if (res.ok) setBom(await res.json());
-    } catch {
-      // network hiccup mid-poll -- just try again on the next tick
-    }
-  }, [token]);
+  const { pollBomQuietly, onItemResolved } = useBomPolling(bom, setBom);
 
-  // Stable no-arg callback for SectionTable's onResolved prop -- reads the
-  // live BOM id via bomRef so it doesn't need `bom` in its deps.
-  const onItemResolved = useCallback(() => {
-    if (bomRef.current) pollBomQuietly(bomRef.current.id);
-  }, [pollBomQuietly]);
-
-  // Auto-refresh: as long as the open BOM has any item still "pending"
-  // (freshly added, or mid-scrape from a manual/bulk refresh), keep
-  // quietly re-fetching every few seconds so prices pop in on their own
-  // instead of needing a manual page reload. Stops itself once nothing
-  // is pending anymore.
+  // Any failed optimistic mutation forces a quiet server reconciliation,
+  // rolling the UI back to the authoritative database state.
   useEffect(() => {
-    if (!bom) return;
-    const hasPending = bom.sections?.some((s) =>
-      s.items.some((i) => i.status === "pending" || !i.status)
-    );
-    if (!hasPending) return;
-    const t = setTimeout(() => pollBomQuietly(bom.id), 4000);
-    return () => clearTimeout(t);
-  }, [bom]);
+    const onMutationFailed = () => {
+      if (bomRef.current) pollBomQuietly(bomRef.current.id);
+    };
+    window.addEventListener("bom-api-mutation-failed", onMutationFailed);
+    return () => window.removeEventListener("bom-api-mutation-failed", onMutationFailed);
+  }, [pollBomQuietly]);
 
   async function loadBomList() {
     setBomListLoading(true);
@@ -1324,8 +1203,7 @@ export default function App() {
               <p style={{ color: theme.warnText, background: theme.warnBg, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
                 <span style={{ flexShrink: 0, marginTop: 2 }}><IconWarning size={15} color={theme.warnText} /></span>
                 <span>
-                  {bom.totals.staleCount} Amazon item(s) couldn't be refreshed automatically —
-                  showing their last known price. Use "Solve CAPTCHA" on the row to update them.
+                  {bom.totals.staleCount} item(s) couldn't be refreshed automatically — showing their last known price. Try Refresh again later.
                 </span>
               </p>
             )}
@@ -1348,7 +1226,6 @@ export default function App() {
                 key={section.id}
                 section={section}
                 theme={theme}
-                token={token}
                 onResolved={onItemResolved}
                 onAddRow={addRow}
                 onDeleteRow={deleteRow}

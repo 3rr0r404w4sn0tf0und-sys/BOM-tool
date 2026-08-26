@@ -68,3 +68,16 @@
 2. Deploy the updated `api/` (Express) and `frontend/` (Vite) as usual —
    `npm install && npm run build` in `frontend/` was verified to build
    clean.
+
+## 2026-08-26 optimization/security pass
+- Added OAuth `state` protection for GitHub login.
+- Added scrape job correlation IDs so stale GitHub Actions callbacks cannot overwrite newer prices.
+- Stopped browser clients from changing scraper-owned price/status/source fields; added an explicit manual-price endpoint.
+- Preserved last-known Amazon/Mouser prices on failed refreshes while marking them stale.
+- Added server-side product URL validation and removed local Playwright dependencies/workflows.
+- Removed the CAPTCHA screenshot/solution hand-off UI, API routes, workflow, and database columns from fresh schema; migration 007 removes them from existing databases.
+- Made spreadsheet imports transactional and dispatch scrapes only after commit.
+- Centralized scraper dispatching and frontend API/polling logic into modules.
+- Serialized frontend mutations and added automatic reconciliation after failed optimistic mutations.
+- Removed per-row refresh polling in favor of one BOM-level polling loop.
+- Added hot-path partial indexes, API rate limiting, verification-email rate limiting, request timeouts, and pinned scraper dependencies.

@@ -18,8 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4 playwright psycopg2-binary
-          playwright install --with-deps chromium
+          pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
 
       - name: Refresh all item prices
         env:

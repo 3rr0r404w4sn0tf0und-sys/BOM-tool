@@ -26,6 +26,7 @@ import os
 import sys
 import psycopg2
 import psycopg2.extras
+import uuid
 from scrape_logic import get_price
 from apify_generic_scrape import try_apify_generic_scrape_batch
 
@@ -40,6 +41,7 @@ SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
 
 def main():
+    job_id = str(uuid.uuid4())
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -52,6 +54,8 @@ def main():
              AND (last_checked IS NULL OR last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
+    if rows:
+        cur.execute("UPDATE items SET status = 'pending', scrape_job_id = %s WHERE id = ANY(%s::uuid[])", (job_id, [r["id"] for r in rows]))
     print(f"Nightly refresh (other items): {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
 
     if not rows:
@@ -78,8 +82,8 @@ def main():
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s, last_checked = now()
-                   WHERE id = %s""",
-                (result["price"], result.get("source"), item_id),
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (result["price"], result.get("source"), item_id, job_id),
             )
         else:
             status = (
@@ -89,9 +93,9 @@ def main():
             )
             cur.execute(
                 """UPDATE items
-                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now()
-                   WHERE id = %s""",
-                (status, item_id),
+                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), scrape_job_id = NULL
+                   WHERE id = %s AND scrape_job_id = %s""",
+                (status, item_id, job_id),
             )
         refreshed += 1
 
@@ -108,7 +112,7 @@ def main():
         except Exception as e:
             print(f"Failed to refresh item {item_id}: {e}", file=sys.stderr)
             cur.execute(
-                "UPDATE items SET status = 'link_failed', last_checked = now() WHERE id = %s",
+                "UPDATE items SET status = 'link_failed', last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
                 (item_id,),
             )
             failed += 1

@@ -33,22 +33,25 @@ APIFY_MOUSER_DOMAINS = ("mouser.com",)
 
 def main():
     item_id = os.environ["ITEM_ID"]
+    job_id = os.environ["JOB_ID"]
     url = os.environ["URL"]
     callback_url = os.environ["CALLBACK_URL"]
     secret = os.environ["INTERNAL_SCRAPE_SECRET"]
 
     try:
-        if "amazon." in url:
+        from urllib.parse import urlparse
+
+        hostname = (urlparse(url).hostname or "").lower()
+        if hostname == "amazon.com" or hostname.endswith(".amazon.com") or hostname.startswith("amazon."):
             # Amazon: try Apify first (costs credits but handles anti-bot),
             # fall back to the plain HTTP fast path (free, won't get past
-            # a CAPTCHA -- that's fine here, it just reports
-            # price_not_found and the user can use "Solve CAPTCHA" from
-            # the BOM page afterward).
+            # a protected page -- it reports price_not_found and preserves any
+            # previously known protected-store price as stale on the API side).
             result = try_apify_scrape(url)
             if not result.get("found"):
                 print(f"Apify failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
-        elif any(domain in url for domain in APIFY_MOUSER_DOMAINS):
+        elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_MOUSER_DOMAINS):
             # Mouser: try the dedicated Mouser Actor first (talks to
             # Mouser's own data layer, sidesteps the Akamai block
             # entirely), then the generic Puppeteer scrape, then the
@@ -60,7 +63,7 @@ def main():
             if not result.get("found"):
                 print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
-        elif any(domain in url for domain in APIFY_GENERIC_DOMAINS):
+        elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_GENERIC_DOMAINS):
             # Known WAF-blocked distributor sites: try Apify's generic
             # Puppeteer Scraper (runs from Apify's proxy IPs) first, fall
             # back to the plain HTTP fast path.
@@ -75,6 +78,7 @@ def main():
 
     payload = {
         "item_id": item_id,
+        "job_id": job_id,
         "found": result.get("found", False),
         "price": result.get("price"),
         "source": result.get("source"),

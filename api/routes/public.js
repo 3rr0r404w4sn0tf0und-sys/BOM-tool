@@ -2,8 +2,17 @@ import express from "express";
 import { pool } from "../db/pool.js";
 import { calculateTotals } from "../db/totals.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+import rateLimit from "express-rate-limit";
 
 export const publicRouter = express.Router();
+const publicApiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many API requests. Try again shortly." },
+});
+publicRouter.use(publicApiLimiter);
 
 // Auth via API key. Prefer the X-API-Key header, but also accept
 // ?api_key=... in the query string -- tools like Google Sheets'

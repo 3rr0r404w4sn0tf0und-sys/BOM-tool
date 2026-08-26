@@ -1,12 +1,20 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { setAuthCookie, clearAuthCookie, requireCsrf, getAuthToken, createSession, revokeSession, issueSessionToken, getSessionFromRequest } from "../middleware/auth.js";
 
 export const authRouter = express.Router();
+const verificationResendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 3,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many verification emails. Try again later." },
+});
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Vercel frontend URL -- verification links and OAuth redirects both land
@@ -15,6 +23,28 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 // Render API's own public URL -- OAuth providers redirect back to this
 // server (not the frontend) so we can exchange the code server-side.
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "http://localhost:4000";
+
+const OAUTH_STATE_COOKIE = "bom-oauth-state";
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+function setOAuthState(res, state) {
+  res.cookie(OAUTH_STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/api/auth/github",
+    maxAge: OAUTH_STATE_MAX_AGE_MS,
+  });
+}
+
+function clearOAuthState(res) {
+  res.clearCookie(OAUTH_STATE_COOKIE, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/api/auth/github",
+  });
+}
 
 function makeVerificationToken() {
   const token = crypto.randomBytes(32).toString("hex");
@@ -119,7 +149,7 @@ authRouter.post("/verify", asyncHandler(async (req, res) => {
   res.json({ verified: true });
 }));
 
-authRouter.post("/resend-verification", requireCsrf, asyncHandler(async (req, res) => {
+authRouter.post("/resend-verification", verificationResendLimiter, requireCsrf, asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
 
@@ -220,17 +250,29 @@ authRouter.get("/github/start", (req, res) => {
   if (!process.env.GITHUB_OAUTH_CLIENT_ID) {
     return redirectWithError(res, "GitHub login isn't configured yet");
   }
+  const state = crypto.randomBytes(32).toString("hex");
+  setOAuthState(res, state);
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_OAUTH_CLIENT_ID,
     redirect_uri: `${API_PUBLIC_URL}/api/auth/github/callback`,
     scope: "read:user user:email",
+    state,
   });
   res.redirect(`https://github.com/login/oauth/authorize?${params}`);
 });
 
 authRouter.get("/github/callback", asyncHandler(async (req, res) => {
-  const { code, error } = req.query;
-  if (error || !code) return redirectWithError(res, "GitHub login was cancelled or failed");
+  const { code, error, state } = req.query;
+  const expectedState = req.cookies?.[OAUTH_STATE_COOKIE];
+  if (error || !code) { clearOAuthState(res); return redirectWithError(res, "GitHub login was cancelled or failed"); }
+  if (!state || !expectedState) { clearOAuthState(res); return redirectWithError(res, "GitHub login session expired. Please try again."); }
+  const stateBuf = Buffer.from(String(state));
+  const expectedBuf = Buffer.from(String(expectedState));
+  if (stateBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(stateBuf, expectedBuf)) {
+    clearOAuthState(res);
+    return redirectWithError(res, "Invalid GitHub login state. Please try again.");
+  }
+  clearOAuthState(res);
 
   try {
     const tokenResp = await fetch("https://github.com/login/oauth/access_token", {
