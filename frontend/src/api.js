@@ -17,7 +17,7 @@ export async function apiFetch(path, options = {}) {
 
   const { timeoutMs: requestedTimeout, signal: externalSignal, ...fetchOptions } = options;
   const timeoutMs = requestedTimeout ?? (fetchOptions.body instanceof FormData ? 60_000 : 15_000);
-  const requestUrl = `${API_URL}${path.startsWith("http") ? "" : path}`;
+  const requestUrl = /^https?:\/\//i.test(path) ? path : `${API_URL}${path}`;
 
   const perform = () => {
     const controller = new AbortController();
