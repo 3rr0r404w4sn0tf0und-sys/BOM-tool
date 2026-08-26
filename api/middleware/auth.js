@@ -97,6 +97,37 @@ export function requireAuth(req, res, next) {
     });
 }
 
+// Double-submit CSRF check: the token is derived (HMAC) from the session id
+// rather than stored, so any request must prove it holds a valid session
+// cookie *and* knows the matching X-CSRF-Token header before it can mutate
+// state. Relies on getSessionFromRequest rather than req.sessionId so it
+// works standalone on routes (e.g. /auth/logout) that don't run requireAuth.
+export function requireCsrf(req, res, next) {
+  getSessionFromRequest(req)
+    .then((auth) => {
+      if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
+
+      const expected = makeCsrfToken(auth.payload.sid);
+      const provided = req.get("X-CSRF-Token") || "";
+
+      const expectedBuf = Buffer.from(expected, "utf8");
+      const providedBuf = Buffer.from(provided, "utf8");
+      const valid =
+        expectedBuf.length === providedBuf.length &&
+        crypto.timingSafeEqual(expectedBuf, providedBuf);
+
+      if (!valid) return res.status(403).json({ error: "Invalid or missing CSRF token" });
+
+      req.userId = auth.payload.userId;
+      req.sessionId = auth.payload.sid;
+      next();
+    })
+    .catch((err) => {
+      console.error("CSRF check failed:", err);
+      res.status(500).json({ error: "Authentication service unavailable" });
+    });
+}
+
 // Browsers send Origin on normal fetch/XHR requests. Allowing requests with
 // no Origin keeps curl/server-to-server API clients working while rejecting
 // cross-site browser form/fetch attempts before they reach a mutating route.
