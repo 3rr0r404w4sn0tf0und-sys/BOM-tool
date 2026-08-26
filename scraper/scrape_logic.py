@@ -2,19 +2,17 @@
 Core price-scraping logic, used by both GitHub Actions workflows
 (on-demand single scrape + nightly full refresh).
 
-Each Actions run is its own isolated VM, so no shared-process locking
-is needed here (unlike a long-running server handling concurrent
-requests) -- one browser per run is naturally the max concurrency.
+Plain HTTP GET, parse Open Graph / JSON-LD / itemprop / pricing-table
+price data. Covers most Shopify/WooCommerce/generic stores (FoxTech,
+etc.) with no browser needed. Sites that need real JS rendering
+(Amazon, Mouser, Arrow) are routed to their dedicated Apify actors
+upstream of this file instead -- there's no local-browser fallback
+here anymore (no Playwright/Puppeteer), since maintaining a local
+headless-browser fallback duplicated what the Apify actors already do
+more reliably, and slowed every batch run down.
 
-1. Fast path: plain HTTP GET, parse Open Graph / JSON-LD price data.
-   Covers most Shopify/WooCommerce/generic stores (FoxTech, etc.) with
-   no browser needed -- tried first for every URL, including Amazon,
-   in case a price ever shows up there (it usually won't).
-2. Fallback: Playwright headless browser (real Chromium, 7GB RAM
-   available on the Actions runner) -- used for JS-rendered pages and
-   as the primary method for Amazon.
-3. Dead / offline links are detected and reported as "link_failed"
-   rather than raising -- callers should never crash on this.
+Dead / offline links are detected and reported as "link_failed" rather
+than raising -- callers should never crash on this.
 """
 
 import json
@@ -155,92 +153,5 @@ def try_generic_scrape(url: str) -> dict:
     return {"found": False, "error": "No price found via generic scrape"}
 
 
-def try_playwright_scrape(url: str) -> dict:
-    from playwright.sync_api import sync_playwright
-
-    is_amazon = "amazon." in url
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=random.choice(USER_AGENTS),
-            viewport={"width": 1280, "height": 800},
-        )
-        page = context.new_page()
-        try:
-            response = page.goto(url, timeout=25000, wait_until="domcontentloaded")
-            if response and response.status in (404, 410):
-                return {"found": False, "error": "link_failed: page returned 404/410"}
-
-            if is_amazon:
-                page.wait_for_timeout(random.randint(2000, 5000))
-                selectors = [
-                    "span.a-price span.a-offscreen",
-                    "#priceblock_ourprice",
-                    "#priceblock_dealprice",
-                ]
-                for sel in selectors:
-                    el = page.query_selector(sel)
-                    if el:
-                        price = _clean_price(el.inner_text())
-                        if price:
-                            return {"found": True, "price": price, "source": f"amazon:{sel}"}
-
-                if page.query_selector("text=Page Not Found"):
-                    return {"found": False, "error": "link_failed: Amazon page not found"}
-
-                if page.query_selector("form[action*='validateCaptcha']"):
-                    return {"found": False, "error": "Blocked by Amazon CAPTCHA"}
-
-                return {"found": False, "error": "Amazon page loaded but no price selector matched"}
-
-            # Non-Amazon: many distributor sites (Mouser, etc.) populate
-            # their pricing table via an async call *after* the initial
-            # page load, so a blind fixed-length wait races that fetch.
-            # Wait for something that looks like a price to actually
-            # exist in the DOM -- either an itemprop tag or a table cell
-            # starting with "$" -- falling back to a short flat wait if
-            # neither shows up in time (still lets other extraction
-            # paths further down get a chance).
-            try:
-                page.wait_for_function(
-                    """() => {
-                        if (document.querySelector('[itemprop="price"]')) return true;
-                        const cells = document.querySelectorAll('table td, table th');
-                        for (const c of cells) {
-                            if (c.textContent.trim().startsWith('$')) return true;
-                        }
-                        return false;
-                    }""",
-                    timeout=8000,
-                )
-            except Exception:
-                # Nothing showed up in time -- fall back to a short flat
-                # wait so slower-but-not-broken pages still get one last
-                # chance before extraction runs on whatever loaded.
-                page.wait_for_timeout(random.randint(1000, 2000))
-
-            html = page.content()
-            soup = BeautifulSoup(html, "html.parser")
-            price_tag = soup.find(attrs={"itemprop": "price"})
-            if price_tag:
-                price = _clean_price(price_tag.get("content") or price_tag.text)
-                if price:
-                    return {"found": True, "price": price, "source": "playwright_itemprop"}
-
-            table_price = _find_pricing_table_price(soup)
-            if table_price:
-                return {"found": True, "price": table_price, "source": "playwright_pricing_table"}
-
-            return {"found": False, "error": "No price found even after JS render"}
-        except Exception as e:
-            return {"found": False, "error": f"Playwright error: {e}"}
-        finally:
-            browser.close()
-
-
 def get_price(url: str) -> dict:
-    result = try_generic_scrape(url)
-    if result["found"]:
-        return result
-    return try_playwright_scrape(url)
+    return try_generic_scrape(url)

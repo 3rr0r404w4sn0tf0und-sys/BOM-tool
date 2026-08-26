@@ -2,35 +2,37 @@
 Entry point for .github/workflows/weekly-refresh-mouser.yml
 
 Runs weekly (not nightly) specifically for Mouser items, mirroring the
-existing Amazon biweekly job (actions_refresh_amazon_weekly.py) but on a
-weekly cadence. Mouser was pulled out of the nightly job for the same
-reason Amazon was: Apify usage costs credits and Mouser's Akamai bot
-protection is prone to blocking, so hitting it every single night isn't
-worth it.
+Amazon weekly job. Mouser was pulled out of the nightly job for the
+same reason Amazon was: Apify usage costs credits and Mouser's Akamai
+bot protection is prone to blocking, so hitting it every single night
+isn't worth it.
 
-Order of attempts per item (same as actions_scrape_one.py):
-1. Dedicated Mouser Actor (crawloop/mouser-product-scraper) -- talks to
-   Mouser's own data layer instead of screen-scraping the rendered page,
-   sidesteps the Akamai block entirely. Tried first.
-2. Generic Apify Puppeteer scrape (different infra/IP than the Actions
-   runner, but still screen-scrapes -- next best thing).
-3. Direct Playwright scrape (free, most likely to get blocked).
-4. If all three fail: keep the last known price, flag stale_price = true,
-   same as the Amazon weekly job does.
+1. Skip anything checked in the last 3 days -- covers items a person
+   already manually refreshed (via the BOM page dropdown) earlier in
+   the week.
+2. Everything left goes to the dedicated Mouser Actor
+   (crawloop/mouser-product-scraper) in ONE batched run -- it talks to
+   Mouser's own data layer instead of screen-scraping the rendered
+   page, sidestepping the Akamai block, and batching cuts out the
+   per-item Actor startup overhead that made this slow before.
+3. Anything the dedicated Actor didn't find a price for falls back to
+   ONE batched run of the generic Apify Puppeteer scrape
+   (apify_generic_scrape.py) for just the leftover urls.
+4. Anything still not found keeps its last known price and gets
+   flagged stale_price = true, same as the Amazon weekly job.
+
+No local Playwright/Puppeteer fallback anymore -- it duplicated what
+the Apify actors already handle more reliably, on top of adding
+per-item overhead that batching now avoids.
 """
 
 import os
-import time
-import random
 import psycopg2
 import psycopg2.extras
-from scrape_logic import try_playwright_scrape
-from apify_mouser_scrape import try_apify_mouser_scrape
-from apify_generic_scrape import try_apify_generic_scrape
+from apify_mouser_scrape import try_apify_mouser_scrape_batch
+from apify_generic_scrape import try_apify_generic_scrape_batch
 
-# Pace Playwright fallback attempts so we don't hammer Mouser back to back.
-DELAY_MIN = 15
-DELAY_MAX = 45
+SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
 
 def main():
@@ -39,35 +41,38 @@ def main():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute(
-        "SELECT id, url FROM items WHERE url IS NOT NULL AND url != '' AND url ILIKE '%mouser.%'"
+        f"""SELECT id, url FROM items
+            WHERE url IS NOT NULL AND url != '' AND url ILIKE '%mouser.%'
+              AND (last_checked IS NULL OR last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
-    print(f"Weekly Mouser refresh: {len(rows)} items to check")
+    print(f"Weekly Mouser refresh: {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
+
+    if not rows:
+        cur.close()
+        conn.close()
+        print("Nothing to do.")
+        return
+
+    urls = [row["url"] for row in rows]
+    url_to_id = {row["url"]: row["id"] for row in rows}
+
+    results = try_apify_mouser_scrape_batch(urls)
+
+    leftover_urls = [u for u in urls if not results.get(u, {}).get("found")]
+    if leftover_urls:
+        print(f"Dedicated Mouser Actor found {len(urls) - len(leftover_urls)}/{len(urls)}; "
+              f"trying generic Apify scrape for the remaining {len(leftover_urls)}")
+        generic_results = try_apify_generic_scrape_batch(leftover_urls)
+        results.update(generic_results)
 
     refreshed = 0
     stale = 0
 
-    for i, row in enumerate(rows):
-        item_id, url = row["id"], row["url"]
-        print(f"--- {item_id} ({i + 1}/{len(rows)}) ---")
-
-        result = try_apify_mouser_scrape(url)
+    for url, item_id in url_to_id.items():
+        result = results.get(url, {"found": False, "error": "no result returned"})
         if result.get("found"):
-            print(f"Apify Mouser Actor found price: {result['price']}")
-        else:
-            print(f"Apify Mouser Actor failed ({result.get('error')}), trying generic Apify scrape")
-            result = try_apify_generic_scrape(url)
-            if result.get("found"):
-                print(f"Apify generic scrape found price: {result['price']}")
-            else:
-                print(f"Apify generic scrape failed ({result.get('error')}), falling back to Playwright")
-                time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
-                try:
-                    result = try_playwright_scrape(url)
-                except Exception as e:
-                    result = {"found": False, "error": f"Playwright error: {e}"}
-
-        if result.get("found"):
+            print(f"{item_id}: found price {result['price']} (source: {result.get('source')})")
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s, last_checked = now(),
@@ -77,7 +82,7 @@ def main():
             )
             refreshed += 1
         else:
-            print(f"All methods failed ({result.get('error')}), keeping last known price")
+            print(f"{item_id}: all methods failed ({result.get('error')}), keeping last known price")
             cur.execute(
                 "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
                 (item_id,),

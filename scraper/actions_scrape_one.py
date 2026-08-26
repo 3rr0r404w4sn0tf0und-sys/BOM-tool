@@ -15,10 +15,9 @@ from apify_scrape import try_apify_scrape
 from apify_generic_scrape import try_apify_generic_scrape
 from apify_mouser_scrape import try_apify_mouser_scrape
 
-# Domains confirmed to block/starve a plain self-hosted headless
-# Playwright browser (WAF fingerprinting or async-content withholding)
-# -- these route through Apify's proxy infra first. Add to this list
-# as new domains are confirmed to have the same problem; don't add
+# Domains confirmed to block/starve a plain HTTP fetch -- these route
+# through Apify's generic Puppeteer Actor instead. Add to this list as
+# new domains are confirmed to have the same problem; don't add
 # speculatively, since each Apify call costs credits.
 APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 
@@ -27,7 +26,8 @@ APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 # scraping the rendered page -- more reliable than the generic Puppeteer
 # path below, which can still get WAF-blocked even from Apify's own
 # infrastructure. Tried first for Mouser; falls back to the generic path,
-# then plain Playwright, same as every other route here.
+# then the plain HTTP fast path as a last resort, same as every other
+# route here.
 APIFY_MOUSER_DOMAINS = ("mouser.com",)
 
 
@@ -40,32 +40,33 @@ def main():
     try:
         if "amazon." in url:
             # Amazon: try Apify first (costs credits but handles anti-bot),
-            # fall back to direct Playwright (free, may hit a CAPTCHA --
-            # that's fine here, it just reports price_not_found and the
-            # user can use "Solve CAPTCHA" from the BOM page afterward).
+            # fall back to the plain HTTP fast path (free, won't get past
+            # a CAPTCHA -- that's fine here, it just reports
+            # price_not_found and the user can use "Solve CAPTCHA" from
+            # the BOM page afterward).
             result = try_apify_scrape(url)
             if not result.get("found"):
-                print(f"Apify failed ({result.get('error')}), trying Playwright directly")
+                print(f"Apify failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
         elif any(domain in url for domain in APIFY_MOUSER_DOMAINS):
             # Mouser: try the dedicated Mouser Actor first (talks to
             # Mouser's own data layer, sidesteps the Akamai block
-            # entirely), then the generic Puppeteer scrape, then plain
-            # Playwright as a last resort.
+            # entirely), then the generic Puppeteer scrape, then the
+            # plain HTTP fast path as a last resort.
             result = try_apify_mouser_scrape(url)
             if not result.get("found"):
                 print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
                 result = try_apify_generic_scrape(url)
             if not result.get("found"):
-                print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright directly")
+                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
         elif any(domain in url for domain in APIFY_GENERIC_DOMAINS):
             # Known WAF-blocked distributor sites: try Apify's generic
-            # Puppeteer Scraper (runs from Apify's proxy IPs, not the
-            # Actions runner's) first, fall back to plain Playwright.
+            # Puppeteer Scraper (runs from Apify's proxy IPs) first, fall
+            # back to the plain HTTP fast path.
             result = try_apify_generic_scrape(url)
             if not result.get("found"):
-                print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright directly")
+                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
         else:
             result = get_price(url)

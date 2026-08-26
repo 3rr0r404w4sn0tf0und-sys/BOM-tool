@@ -106,8 +106,29 @@ async function pageFunction(context) {
 
 
 def try_apify_generic_scrape(url: str) -> dict:
+    results = try_apify_generic_scrape_batch([url])
+    return results.get(url, {"found": False, "error": "Apify returned no results"})
+
+
+def try_apify_generic_scrape_batch(urls: list) -> dict:
+    """Same page-scraping logic as try_apify_generic_scrape, but crawls
+    every URL in ONE Actor run instead of one run per URL. This is the
+    thing that made batch refreshes slow -- an Actor run has real
+    startup/proxy-negotiation overhead (several seconds) before it even
+    loads the first page, and firing that once per item instead of once
+    per whole batch was most of the wall-clock time on a big BOM.
+
+    Returns {url: {found, price, source}} -- one entry per input url.
+    Any url missing from Apify's response (crawl failure on just that
+    page) is filled in with a "found: false" entry so callers can loop
+    over the original url list without KeyError risk.
+    """
+    if not urls:
+        return {}
+
     if not APIFY_TOKEN:
-        return {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
+        error = {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
+        return {u: error for u in urls}
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_PUPPETEER_ACTOR_ID.replace('/', '~')}"
@@ -115,15 +136,15 @@ def try_apify_generic_scrape(url: str) -> dict:
     )
 
     run_input = {
-        "startUrls": [{"url": url}],
+        "startUrls": [{"url": u} for u in urls],
         "pageFunction": PAGE_FUNCTION,
         "proxyConfiguration": {"useApifyProxy": True},
         "headless": True,
         "useChrome": False,
         "waitUntil": ["networkidle2"],
-        # Cost/scope controls -- single page only, no crawling, no
-        # unnecessary asset downloads.
-        "maxRequestsPerCrawl": 1,
+        # Cost/scope controls -- exactly one request per input url, no
+        # crawling beyond that, no unnecessary asset downloads.
+        "maxRequestsPerCrawl": len(urls),
         "downloadCss": False,
         "downloadMedia": False,
         "closeCookieModals": True,
@@ -136,22 +157,41 @@ def try_apify_generic_scrape(url: str) -> dict:
         "respectRobotsTxtFile": False,
     }
 
+    # A batch run legitimately takes longer than a single-url run --
+    # scale the timeout with the batch size (with headroom), capped so
+    # a bad request doesn't hang forever.
+    timeout = min(120 + 15 * len(urls), 900)
+
     try:
-        resp = requests.post(endpoint, json=run_input, timeout=120)
+        resp = requests.post(endpoint, json=run_input, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
     except Exception as e:
-        return {"found": False, "error": f"Apify request failed: {e}"}
+        error = {"found": False, "error": f"Apify request failed: {e}"}
+        return {u: error for u in urls}
 
-    if not items:
-        return {"found": False, "error": "Apify returned no results"}
+    results = {}
+    for item in items:
+        item_url = item.get("url")
+        if not item_url:
+            continue
+        if item.get("found"):
+            results[item_url] = {
+                "found": True,
+                "price": item["price"],
+                "source": item.get("source", "apify_generic"),
+            }
+        else:
+            print(f"DEBUG: Apify generic scrape found nothing for {item_url}, raw item: {item}")
+            results[item_url] = {"found": False, "error": "Apify generic scrape found no price on page"}
 
-    item = items[0]
-    if not item.get("found"):
-        print(f"DEBUG: Apify generic scrape found nothing, raw item: {item}")
-        return {"found": False, "error": "Apify generic scrape found no price on page"}
+    # Fill in anything Apify's dataset didn't return a row for at all
+    # (e.g. a request that errored out before pageFunction ever ran).
+    for u in urls:
+        if u not in results:
+            results[u] = {"found": False, "error": "Apify returned no result for this url"}
 
-    return {"found": True, "price": item["price"], "source": item.get("source", "apify_generic")}
+    return results
 
 
 if __name__ == "__main__":

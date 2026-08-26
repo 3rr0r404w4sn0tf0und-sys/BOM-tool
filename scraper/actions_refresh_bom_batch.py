@@ -6,40 +6,38 @@ Scrapes every item in ONE specific BOM that matches FILTER
 buttons on the BOM page trigger. One repository_dispatch, one Actions
 run, instead of firing a separate dispatch per item.
 
-Amazon items go through Apify first, falling back to direct Playwright
-(same order as the weekly Amazon job) and keep their last known price
-on total failure, flagged stale. Mouser items try the dedicated Mouser
-Actor first, then the generic Apify Puppeteer scrape, then direct
-Playwright (same order as actions_scrape_one.py / the weekly Mouser
-job), and also keep their last known price on total failure, flagged
-stale. Everything else ("other") uses the plain get_price() scraper
-(same as the nightly job) and clears its price on failure, same as that
-job does.
+Two optimizations over the old per-item loop:
+1. Skip anything checked in the last 3 days -- if you already refreshed
+   "Amazon items" this morning and hit "Everything" this afternoon,
+   those Amazon items don't get re-scraped for free.
+2. Whatever's left is grouped by provider (Amazon / Mouser / other) and
+   sent to each Apify actor in ONE batched run per provider, instead of
+   one Actor run per item -- an Actor run has real startup/proxy-
+   negotiation overhead before it even loads the first page, so this is
+   what actually cuts the wait down on a BOM with a lot of items.
+
+Amazon items go through the Apify Amazon Actor and keep their last
+known price on failure, flagged stale. Mouser items try the dedicated
+Mouser Actor first, then the generic Apify Puppeteer scrape for
+whatever's left over, and also keep their last known price on failure,
+flagged stale. Everything else ("other") uses the plain get_price()
+scraper (same as the nightly job) and clears its price on failure, same
+as that job does.
+
+No local Playwright/Puppeteer fallback anymore -- it duplicated what
+the Apify actors already handle more reliably, and was slow on top of
+that.
 """
 
 import os
-import time
-import random
 import psycopg2
 import psycopg2.extras
-from scrape_logic import get_price, try_playwright_scrape
-from apify_scrape import try_apify_scrape
-from apify_generic_scrape import try_apify_generic_scrape
-from apify_mouser_scrape import try_apify_mouser_scrape
+from scrape_logic import get_price
+from apify_scrape import try_apify_scrape_batch
+from apify_generic_scrape import try_apify_generic_scrape_batch
+from apify_mouser_scrape import try_apify_mouser_scrape_batch
 
-# Pace Playwright fallback attempts so we don't hammer sites back to back.
-DELAY_MIN = 5
-DELAY_MAX = 15
-
-# Keep in sync with actions_scrape_one.py / actions_refresh_all.py --
-# domains confirmed to block/starve a plain self-hosted headless
-# Playwright browser, routed through Apify's proxy infra first.
-APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
-
-# mouser.com has a dedicated Actor (see apify_mouser_scrape.py) tried
-# ahead of the generic Puppeteer path -- keep in sync with
-# actions_scrape_one.py.
-APIFY_MOUSER_DOMAINS = ("mouser.com",)
+SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
 
 def is_amazon(url):
@@ -47,11 +45,7 @@ def is_amazon(url):
 
 
 def is_mouser(url):
-    return any(domain in url for domain in APIFY_MOUSER_DOMAINS)
-
-
-def is_apify_generic(url):
-    return any(domain in url for domain in APIFY_GENERIC_DOMAINS)
+    return "mouser.com" in url
 
 
 def main():
@@ -62,7 +56,10 @@ def main():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    where = "sections.bom_id = %s AND items.url IS NOT NULL AND items.url != ''"
+    where = (
+        "sections.bom_id = %s AND items.url IS NOT NULL AND items.url != '' "
+        f"AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"
+    )
     params = [bom_id]
     if filt == "amazon":
         where += " AND items.url ILIKE %s"
@@ -82,39 +79,62 @@ def main():
         params,
     )
     rows = cur.fetchall()
-    print(f"BOM batch refresh ({filt}) for bom {bom_id}: {len(rows)} items to check")
+    print(f"BOM batch refresh ({filt}) for bom {bom_id}: {len(rows)} items to check "
+          f"(skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
+
+    if not rows:
+        cur.close()
+        conn.close()
+        print("Nothing to do.")
+        return
+
+    amazon_rows = [r for r in rows if is_amazon(r["url"])]
+    mouser_rows = [r for r in rows if is_mouser(r["url"])]
+    other_rows = [r for r in rows if not is_amazon(r["url"]) and not is_mouser(r["url"])]
+
+    results = {}
+
+    if amazon_rows:
+        results.update(try_apify_scrape_batch([r["url"] for r in amazon_rows]))
+
+    if mouser_rows:
+        mouser_urls = [r["url"] for r in mouser_rows]
+        mouser_results = try_apify_mouser_scrape_batch(mouser_urls)
+        leftover = [u for u in mouser_urls if not mouser_results.get(u, {}).get("found")]
+        if leftover:
+            print(f"Dedicated Mouser Actor found {len(mouser_urls) - len(leftover)}/{len(mouser_urls)}; "
+                  f"trying generic Apify scrape for the remaining {len(leftover)}")
+            mouser_results.update(try_apify_generic_scrape_batch(leftover))
+        results.update(mouser_results)
 
     refreshed = 0
     failed = 0
 
-    for i, row in enumerate(rows):
+    for row in amazon_rows + mouser_rows:
         item_id, url = row["id"], row["url"]
-        print(f"--- {item_id} ({i + 1}/{len(rows)}) ---")
+        result = results.get(url, {"found": False, "error": "no result returned"})
+        if result.get("found"):
+            cur.execute(
+                """UPDATE items
+                   SET unit_price = %s, status = 'ok', source = %s,
+                       last_checked = now(), stale_price = false
+                   WHERE id = %s""",
+                (result["price"], result.get("source"), item_id),
+            )
+            refreshed += 1
+        else:
+            # Keep the last known price for Amazon/Mouser rather than
+            # nuking it -- same behavior as their dedicated weekly jobs.
+            cur.execute(
+                "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
+                (item_id,),
+            )
+            failed += 1
 
+    for row in other_rows:
+        item_id, url = row["id"], row["url"]
         try:
-            if is_amazon(url):
-                result = try_apify_scrape(url)
-                if not result.get("found"):
-                    print(f"Apify failed ({result.get('error')}), trying Playwright")
-                    time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
-                    result = try_playwright_scrape(url)
-            elif is_mouser(url):
-                result = try_apify_mouser_scrape(url)
-                if not result.get("found"):
-                    print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
-                    result = try_apify_generic_scrape(url)
-                if not result.get("found"):
-                    print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright")
-                    time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
-                    result = try_playwright_scrape(url)
-            elif is_apify_generic(url):
-                result = try_apify_generic_scrape(url)
-                if not result.get("found"):
-                    print(f"Apify generic scrape failed ({result.get('error')}), trying Playwright")
-                    time.sleep(random.randint(DELAY_MIN, DELAY_MAX))
-                    result = try_playwright_scrape(url)
-            else:
-                result = get_price(url)
+            result = get_price(url)
         except Exception as e:
             result = {"found": False, "error": f"Unhandled scrape error: {e}"}
 
@@ -128,25 +148,17 @@ def main():
             )
             refreshed += 1
         else:
-            if is_amazon(url) or is_mouser(url):
-                # Keep the last known price for Amazon/Mouser rather than
-                # nuking it -- same behavior as their dedicated weekly jobs.
-                cur.execute(
-                    "UPDATE items SET stale_price = true, last_checked = now() WHERE id = %s",
-                    (item_id,),
-                )
-            else:
-                status = (
-                    "link_failed"
-                    if "link_failed" in (result.get("error") or "").lower()
-                    else "price_not_found"
-                )
-                cur.execute(
-                    """UPDATE items
-                       SET unit_price = NULL, status = %s, source = NULL, last_checked = now()
-                       WHERE id = %s""",
-                    (status, item_id),
-                )
+            status = (
+                "link_failed"
+                if "link_failed" in (result.get("error") or "").lower()
+                else "price_not_found"
+            )
+            cur.execute(
+                """UPDATE items
+                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now()
+                   WHERE id = %s""",
+                (status, item_id),
+            )
             failed += 1
 
     cur.close()

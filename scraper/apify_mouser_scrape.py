@@ -80,9 +80,37 @@ def _extract_price(item: dict):
     return None
 
 
+def _extract_url(item: dict, fallback: str = None):
+    """Match a returned dataset item back to the input url it came from.
+    Field name isn't confirmed (see module docstring), so try the likely
+    candidates; fall back to whatever url the caller supplies (e.g. by
+    position) if none of them are present."""
+    for key in ("url", "productUrl", "link", "sourceUrl"):
+        val = item.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return fallback
+
+
 def try_apify_mouser_scrape(url: str) -> dict:
+    results = try_apify_mouser_scrape_batch([url])
+    return results.get(url, {"found": False, "error": "Apify Mouser scraper returned no results"})
+
+
+def try_apify_mouser_scrape_batch(urls: list) -> dict:
+    """Same lookup as try_apify_mouser_scrape, but sends every url to the
+    Actor in ONE run (it already accepts a productUrls list) instead of
+    one Actor run per url -- cuts out most of the per-item startup
+    overhead on a big batch refresh.
+
+    Returns {url: {found, price, source}}, one entry per input url.
+    """
+    if not urls:
+        return {}
+
     if not APIFY_TOKEN:
-        return {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
+        error = {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
+        return {u: error for u in urls}
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_MOUSER_ACTOR_ID.replace('/', '~')}"
@@ -90,26 +118,42 @@ def try_apify_mouser_scrape(url: str) -> dict:
     )
 
     run_input = {
-        "productUrls": [url],
+        "productUrls": urls,
         "proxyConfiguration": {"useApifyProxy": False},
     }
 
+    timeout = min(120 + 15 * len(urls), 900)
+
     try:
-        resp = requests.post(endpoint, json=run_input, timeout=120)
+        resp = requests.post(endpoint, json=run_input, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
     except Exception as e:
-        return {"found": False, "error": f"Apify Mouser request failed: {e}"}
+        error = {"found": False, "error": f"Apify Mouser request failed: {e}"}
+        return {u: error for u in urls}
 
-    if not items:
-        return {"found": False, "error": "Apify Mouser scraper returned no results"}
+    results = {}
+    # Best-effort match by an explicit url-ish field; if the Actor's
+    # dataset item doesn't carry one (unconfirmed schema, see docstring
+    # above), fall back to positional matching -- the Actor is expected
+    # to preserve input order for a plain productUrls list.
+    for i, item in enumerate(items):
+        fallback_url = urls[i] if i < len(urls) else None
+        matched_url = _extract_url(item, fallback_url)
+        if not matched_url:
+            continue
+        price = _extract_price(item)
+        if price is None:
+            print(f"DEBUG: Apify Mouser scrape found no known price field for {matched_url}, raw item: {item}")
+            results[matched_url] = {"found": False, "error": "Apify Mouser result had no recognizable price field"}
+        else:
+            results[matched_url] = {"found": True, "price": price, "source": "apify_mouser"}
 
-    price = _extract_price(items[0])
-    if price is None:
-        print(f"DEBUG: Apify Mouser scrape found no known price field, raw item: {items[0]}")
-        return {"found": False, "error": "Apify Mouser result had no recognizable price field"}
+    for u in urls:
+        if u not in results:
+            results[u] = {"found": False, "error": "Apify Mouser scraper returned no result for this url"}
 
-    return {"found": True, "price": price, "source": "apify_mouser"}
+    return results
 
 
 if __name__ == "__main__":

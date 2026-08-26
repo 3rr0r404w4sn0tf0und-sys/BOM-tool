@@ -53,9 +53,34 @@ def _extract_price(item: dict):
     return None
 
 
+def _extract_url(item: dict, fallback: str = None):
+    for key in ("url", "inputUrl", "productUrl", "canonicalUrl"):
+        val = item.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return fallback
+
+
 def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -> dict:
+    results = try_apify_scrape_batch([url], zip_code=zip_code, country_code=country_code)
+    return results.get(url, {"found": False, "error": "Apify returned no results (product may be delisted)"})
+
+
+def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str = None) -> dict:
+    """Same lookup as try_apify_scrape, but sends every url to the Actor
+    in ONE run (categoryOrProductUrls already accepts a list) instead of
+    one Actor run per url -- this is the main thing slowing batch/weekly
+    Amazon refreshes down, since each Actor run has real startup and
+    proxy-negotiation overhead before it scrapes a single page.
+
+    Returns {url: {found, price, source}}, one entry per input url.
+    """
+    if not urls:
+        return {}
+
     if not APIFY_TOKEN or not APIFY_ACTOR_ID:
-        return {"found": False, "error": "Apify not configured (missing token/actor id)"}
+        error = {"found": False, "error": "Apify not configured (missing token/actor id)"}
+        return {u: error for u in urls}
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}"
@@ -63,7 +88,7 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
     )
 
     run_input = {
-        "categoryOrProductUrls": [{"url": url}],
+        "categoryOrProductUrls": [{"url": u} for u in urls],
         # Empty by default -- this is what triggers the billed "Delivery
         # Location" event per item. We don't use zip_code yet, so there's
         # no reason to pay for a location lookup we throw away. Only
@@ -88,27 +113,37 @@ def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -
     if country_code:
         run_input["countryCode"] = country_code
 
+    # Apify runs can take a while, and a batch of urls takes longer than
+    # one -- scale the timeout with batch size, capped so a bad request
+    # doesn't hang forever.
+    timeout = min(120 + 15 * len(urls), 900)
+
     try:
-        resp = requests.post(
-            endpoint,
-            json=run_input,
-            timeout=120,  # Apify runs can take a while, this is a real scrape job
-        )
+        resp = requests.post(endpoint, json=run_input, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
     except Exception as e:
-        return {"found": False, "error": f"Apify request failed: {e}"}
+        error = {"found": False, "error": f"Apify request failed: {e}"}
+        return {u: error for u in urls}
 
-    if not items:
-        return {"found": False, "error": "Apify returned no results (product may be delisted)"}
+    results = {}
+    for i, item in enumerate(items):
+        fallback_url = urls[i] if i < len(urls) else None
+        matched_url = _extract_url(item, fallback_url)
+        if not matched_url:
+            continue
+        price = _extract_price(item)
+        if price is None:
+            print(f"DEBUG: no known price field found for {matched_url}, raw item: {item}")
+            results[matched_url] = {"found": False, "error": "Apify result had no recognizable price field"}
+        else:
+            results[matched_url] = {"found": True, "price": price, "source": "apify"}
 
-    price = _extract_price(items[0])
-    if price is None:
-        # Print raw item so the real field name can be read off a live run
-        print(f"DEBUG: no known price field found, raw item: {items[0]}")
-        return {"found": False, "error": "Apify result had no recognizable price field"}
+    for u in urls:
+        if u not in results:
+            results[u] = {"found": False, "error": "Apify returned no result for this url (product may be delisted)"}
 
-    return {"found": True, "price": price, "source": "apify"}
+    return results
 
 
 if __name__ == "__main__":
