@@ -2,18 +2,40 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
 export { API_URL };
 
+let csrfToken = "";
+let csrfPromise = null;
+
+export function setCsrfToken(token) {
+  csrfToken = typeof token === "string" ? token : "";
+  return csrfToken;
+}
+
 export function getCsrfToken() {
-  return document.cookie
-    .split(";")
-    .map((v) => v.trim())
-    .find((v) => v.startsWith("bom-csrf="))
-    ?.slice("bom-csrf=".length) || "";
+  return csrfToken;
+}
+
+async function ensureCsrfToken() {
+  if (csrfToken) return csrfToken;
+  if (!csrfPromise) {
+    csrfPromise = fetch(`${API_URL}/api/auth/csrf`, { credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`CSRF bootstrap failed (${res.status})`);
+        const data = await res.json();
+        if (!data?.csrfToken) throw new Error("CSRF bootstrap returned no token");
+        csrfToken = data.csrfToken;
+        return csrfToken;
+      })
+      .finally(() => { csrfPromise = null; });
+  }
+  return csrfPromise;
 }
 
 export async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   const method = (options.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("X-CSRF-Token", await ensureCsrfToken());
+  }
 
   const { timeoutMs: requestedTimeout, signal: externalSignal, ...fetchOptions } = options;
   const timeoutMs = requestedTimeout ?? (fetchOptions.body instanceof FormData ? 60_000 : 15_000);

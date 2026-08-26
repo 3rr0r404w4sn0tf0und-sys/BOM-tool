@@ -5,7 +5,7 @@ import rateLimit from "express-rate-limit";
 import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
-import { setAuthCookie, clearAuthCookie, requireCsrf, getAuthToken, createSession, revokeSession, issueSessionToken, getSessionFromRequest } from "../middleware/auth.js";
+import { setAuthCookie, clearAuthCookie, requireCsrf, getAuthToken, createSession, revokeSession, issueSessionToken, getSessionFromRequest, getCsrfTokenForSession } from "../middleware/auth.js";
 
 export const authRouter = express.Router();
 const verificationResendLimiter = rateLimit({
@@ -176,7 +176,13 @@ authRouter.get("/me", asyncHandler(async (req, res) => {
   );
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({ user });
+  res.json({ user, csrfToken: getCsrfTokenForSession(auth.payload.sid) });
+}));
+
+authRouter.get("/csrf", asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
+  res.json({ csrfToken: getCsrfTokenForSession(auth.payload.sid) });
 }));
 
 authRouter.post("/logout", requireCsrf, asyncHandler(async (req, res) => {

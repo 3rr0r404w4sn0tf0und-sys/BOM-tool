@@ -12,6 +12,15 @@ const COOKIE_SAMESITE = IS_PROD ? "none" : "lax";
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CSRF_COOKIE = "bom-csrf";
 
+function makeCsrfToken(sessionId) {
+  return crypto.createHmac("sha256", process.env.JWT_SECRET).update(`csrf:${sessionId}`).digest("hex");
+}
+
+export function getCsrfTokenForSession(sessionId) {
+  if (!sessionId) return null;
+  return makeCsrfToken(sessionId);
+}
+
 export async function createSession(userId) {
   const sessionId = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS);
@@ -104,12 +113,37 @@ export function ensureCsrfCookie(req, res, next) {
 
 export function requireCsrf(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  const cookie = req.cookies?.[CSRF_COOKIE];
+
+  // Do not depend on a cross-site CSRF cookie. Vercel -> Render is a
+  // cross-site browser request and modern browsers may block third-party
+  // cookies even when SameSite=None is set. Instead, derive a CSRF token
+  // from the authenticated server-side session. The token is safe to expose
+  // to the frontend because an attacker on another origin cannot read it.
   const header = req.get("X-CSRF-Token");
-  if (!cookie || !header) return res.status(403).json({ error: "Invalid CSRF token" });
-  const cookieBuf = Buffer.from(cookie);
+  if (!header) return res.status(403).json({ error: "Invalid CSRF token" });
+
+  const sessionId = req.sessionId || null;
+  if (!sessionId) {
+    return getSessionFromRequest(req)
+      .then((auth) => {
+        if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
+        req.userId = auth.payload.userId;
+        req.sessionId = auth.payload.sid;
+        const expected = makeCsrfToken(auth.payload.sid);
+        const expectedBuf = Buffer.from(expected);
+        const headerBuf = Buffer.from(header);
+        if (headerBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(headerBuf, expectedBuf)) {
+          return res.status(403).json({ error: "Invalid CSRF token" });
+        }
+        next();
+      })
+      .catch(next);
+  }
+
+  const expected = makeCsrfToken(sessionId);
+  const expectedBuf = Buffer.from(expected);
   const headerBuf = Buffer.from(header);
-  if (cookieBuf.length !== headerBuf.length || !crypto.timingSafeEqual(cookieBuf, headerBuf)) {
+  if (headerBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(headerBuf, expectedBuf)) {
     return res.status(403).json({ error: "Invalid CSRF token" });
   }
   next();
