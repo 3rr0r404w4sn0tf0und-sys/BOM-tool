@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.19.2",
@@ -12,9 +13,12 @@
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
     "cors": "^2.8.5",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
     "node-fetch": "^3.3.2",
     "multer": "^1.4.5-lts.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "helmet": "^8.1.0",
+    "express-rate-limit": "^7.5.0"
   }
 }

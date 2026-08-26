@@ -1,18 +1,57 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
 import { authRouter } from "./routes/auth.js";
 import { bomsRouter } from "./routes/boms.js";
 import { publicRouter } from "./routes/public.js";
 import { internalRouter } from "./routes/internal.js";
+import { ensureCsrfCookie, requireAllowedOrigin } from "./middleware/auth.js";
+import { auditMutations } from "./middleware/audit.js";
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set("trust proxy", 1);
 
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none"],
+      frameAncestors: ["'none"],
+      baseUri: ["'none"],
+      formAction: ["'self"],
+    },
+  },
+  referrerPolicy: { policy: "no-referrer" },
+}));
+
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .split(",").map((origin) => origin.trim()).filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS origin not allowed"));
+  },
+  credentials: true,
+}));
+app.use(cookieParser());
+app.use(ensureCsrfCookie);
+app.use(requireAllowedOrigin);
+app.use(auditMutations);
+app.use(express.json({ limit: "1mb" }));
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many authentication requests. Try again later." },
+});
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-app.use("/api/auth", authRouter);
+app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/boms", bomsRouter);
 app.use("/api/public", publicRouter); // BOM Clean / BOM Links, for Odoo etc.
 app.use("/api/internal", internalRouter); // GitHub Actions scrape callback

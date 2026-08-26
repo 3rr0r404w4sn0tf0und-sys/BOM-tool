@@ -1,4 +1,11 @@
 import React, { useState, useEffect, useRef, memo } from "react";
+const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
+const apiFetch = (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
+  return fetch(url, { ...options, headers, credentials: "include" });
+};
 import CaptchaSolver from "./CaptchaSolver.jsx";
 import ContextMenu from "./ContextMenu.jsx";
 import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip, IconSmiley } from "./Icons.jsx";
@@ -178,9 +185,9 @@ function RefreshButton({ item, theme, token, onRefresh }) {
     if (firing) return;
     setFiring(true);
     try {
-      await fetch(`${API_URL}/api/boms/items/${item.id}/refresh`, {
+      await apiFetch(`${API_URL}/api/boms/items/${item.id}/refresh`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { },
       });
     } catch {
       // ignore -- polling below will just find nothing changed

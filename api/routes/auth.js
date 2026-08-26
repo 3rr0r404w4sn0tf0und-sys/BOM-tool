@@ -1,10 +1,10 @@
 import express from "express";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+import { setAuthCookie, clearAuthCookie, requireCsrf, getAuthToken, createSession, revokeSession, issueSessionToken, getSessionFromRequest } from "../middleware/auth.js";
 
 export const authRouter = express.Router();
 
@@ -15,10 +15,6 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 // Render API's own public URL -- OAuth providers redirect back to this
 // server (not the frontend) so we can exchange the code server-side.
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "http://localhost:4000";
-
-function issueJwt(userId) {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
-}
 
 function makeVerificationToken() {
   const token = crypto.randomBytes(32).toString("hex");
@@ -58,14 +54,16 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
       [trimmedEmail, hash]
     );
     const user = result.rows[0];
-    const token = issueJwt(user.id);
+    const sessionId = await createSession(user.id);
+    const token = issueSessionToken(user.id, sessionId);
 
     const emailResult = await issueVerificationEmail(user.id, user.email);
     if (!emailResult.sent) {
       console.warn(`Verification email not sent for ${user.email}: ${emailResult.error}`);
     }
 
-    res.json({ token, user, verificationEmailSent: emailResult.sent });
+    setAuthCookie(res, token);
+    res.json({ user, verificationEmailSent: emailResult.sent });
   } catch (e) {
     if (e.code === "23505") {
       return res.status(409).json({ error: "Email already registered" });
@@ -91,8 +89,10 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
   if (!(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
+  const sessionId = await createSession(user.id);
+  const token = issueSessionToken(user.id, sessionId);
+  setAuthCookie(res, token);
   res.json({
-    token: issueJwt(user.id),
     user: { id: user.id, email: user.email, email_verified: user.email_verified },
   });
 }));
@@ -119,19 +119,13 @@ authRouter.post("/verify", asyncHandler(async (req, res) => {
   res.json({ verified: true });
 }));
 
-authRouter.post("/resend-verification", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.replace("Bearer ", "");
-  let payload;
-  try {
-    payload = jwt.verify(token, process.env.JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: "Invalid or expired session" });
-  }
+authRouter.post("/resend-verification", requireCsrf, asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
 
   const result = await pool.query(
     "SELECT id, email, email_verified FROM users WHERE id = $1",
-    [payload.userId]
+    [auth.payload.userId]
   );
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
@@ -141,24 +135,37 @@ authRouter.post("/resend-verification", asyncHandler(async (req, res) => {
   res.json({ sent: emailResult.sent, error: emailResult.error });
 }));
 
-// Used by the frontend after an OAuth redirect (which only returns a JWT
-// in the URL, not the full user object) to fetch the logged-in user.
+// Used by the frontend after an OAuth redirect to fetch the logged-in user
+// from the HttpOnly session cookie set by the callback.
 authRouter.get("/me", asyncHandler(async (req, res) => {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.replace("Bearer ", "");
-  let payload;
-  try {
-    payload = jwt.verify(token, process.env.JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: "Invalid or expired session" });
-  }
+  const auth = await getSessionFromRequest(req);
+  if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
   const result = await pool.query(
     "SELECT id, email, email_verified FROM users WHERE id = $1",
-    [payload.userId]
+    [auth.payload.userId]
   );
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json({ user });
+}));
+
+authRouter.post("/logout", requireCsrf, asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (auth) await revokeSession(auth.payload.sid);
+  clearAuthCookie(res);
+  res.status(204).send();
+}));
+
+authRouter.post("/logout-all", requireCsrf, asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (auth) {
+    await pool.query(
+      "UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+      [auth.payload.userId]
+    );
+  }
+  clearAuthCookie(res);
+  res.status(204).send();
 }));
 
 // ---------- Shared OAuth helper ----------
@@ -194,11 +201,13 @@ async function findOrCreateOAuthUser({ provider, providerId, email }) {
   return created.rows[0];
 }
 
-// Redirects back to the frontend with the JWT in the URL. The frontend
-// reads ?oauth_token= on load, same pattern as ?verify_token=.
-function redirectWithToken(res, userId) {
-  const token = issueJwt(userId);
-  res.redirect(`${FRONTEND_URL}/?oauth_token=${token}`);
+// OAuth callback stores the session in an HttpOnly cookie, then redirects
+// to the frontend without exposing the session token in the URL.
+async function redirectWithToken(res, userId) {
+  const sessionId = await createSession(userId);
+  const token = issueSessionToken(userId, sessionId);
+  setAuthCookie(res, token);
+  res.redirect(FRONTEND_URL);
 }
 
 function redirectWithError(res, message) {
@@ -266,7 +275,7 @@ authRouter.get("/github/callback", asyncHandler(async (req, res) => {
       providerId: String(githubUser.id),
       email,
     });
-    redirectWithToken(res, user.id);
+    await redirectWithToken(res, user.id);
   } catch (e) {
     console.error("GitHub OAuth error:", e);
     redirectWithError(res, "GitHub login failed");

@@ -1,4 +1,11 @@
 import React, { useState } from "react";
+const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
+const apiFetch = (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
+  return fetch(url, { ...options, headers, credentials: "include" });
+};
 import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -127,10 +134,9 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
     setRegenerating(true);
     setRegenError(null);
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${API_URL}/api/boms/${bom.id}/regenerate-key`, {
+      const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/regenerate-key`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { },
       });
       if (!res.ok) throw new Error("Failed to generate a new key");
       const updated = await res.json();

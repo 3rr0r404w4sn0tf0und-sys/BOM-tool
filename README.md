@@ -73,6 +73,14 @@ trigger from your laptop.
 Early scaffold — see inline TODOs, especially in `frontend/` (editor UI,
 emoji picker, drag-to-reorder are not built yet).
 
+## Security hardening / database migration
+
+After deploying the hardened API, run `api/db/migrations/006_security_hardening.sql` against the existing Neon database. Fresh installs should use `api/db/schema.sql`.
+
+For Render, set `FRONTEND_URL` to the exact Vercel origin (no trailing slash) and keep `API_PUBLIC_URL` set to the exact Render API origin.
+
+The production session is an HttpOnly cookie; the frontend already sends `credentials: "include"`.
+
 ## License
 
 MIT — see LICENSE.

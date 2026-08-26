@@ -12,10 +12,16 @@ import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
+const apiFetch = (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
+  return fetch(url, { ...options, headers, credentials: "include" });
+};
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
 const VERIFY_PENDING_SECONDS = 15;
-const TOKEN_STORAGE_KEY = "bom-tool-token";
 
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
@@ -170,8 +176,8 @@ export default function App() {
     });
   }, []);
 
-  const authHeaders = useCallback((extra) => ({ Authorization: `Bearer ${token}`, ...(extra || {}) }), [token]);
-  const jsonHeaders = useCallback(() => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }), [token]);
+  const authHeaders = useCallback((extra) => ({ ...(extra || {}) }), []);
+  const jsonHeaders = useCallback(() => ({ "Content-Type": "application/json" }), []);
 
   // --- Row (item) mutations: optimistic local update + undo/redo command,
   // API call fired in the background. All rely on soft-delete/restore on
@@ -182,7 +188,7 @@ export default function App() {
   // so their identity never changes and SectionTable's React.memo holds. ---
 
   const addRow = useCallback(async (sectionId) => {
-    const res = await fetch(`${API_URL}/api/boms/sections/${sectionId}/items`, {
+    const res = await apiFetch(`${API_URL}/api/boms/sections/${sectionId}/items`, {
       method: "POST",
       headers: jsonHeaders(),
       body: JSON.stringify({ name: "New item", qty: 1 }),
@@ -192,11 +198,11 @@ export default function App() {
     history.push({
       undo: () => {
         setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: s.items.filter((i) => i.id !== item.id) } : s)));
-        fetch(`${API_URL}/api/boms/items/${item.id}`, { method: "DELETE", headers: authHeaders() });
+        apiFetch(`${API_URL}/api/boms/items/${item.id}`, { method: "DELETE", headers: authHeaders() });
       },
       redo: () => {
         setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: [...s.items, item] } : s)));
-        fetch(`${API_URL}/api/boms/items/${item.id}/restore`, { method: "POST", headers: authHeaders() });
+        apiFetch(`${API_URL}/api/boms/items/${item.id}/restore`, { method: "POST", headers: authHeaders() });
       },
     });
   }, [jsonHeaders, authHeaders, setSections, history]);
@@ -209,7 +215,7 @@ export default function App() {
 
     function apply() {
       setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: s.items.filter((i) => i.id !== itemId) } : s)));
-      fetch(`${API_URL}/api/boms/items/${itemId}`, { method: "DELETE", headers: authHeaders() });
+      apiFetch(`${API_URL}/api/boms/items/${itemId}`, { method: "DELETE", headers: authHeaders() });
     }
     function revert() {
       setSections((sections) => sections.map((s) => {
@@ -218,7 +224,7 @@ export default function App() {
         items.splice(Math.min(index, items.length), 0, removedItem);
         return { ...s, items };
       }));
-      fetch(`${API_URL}/api/boms/items/${itemId}/restore`, { method: "POST", headers: authHeaders() });
+      apiFetch(`${API_URL}/api/boms/items/${itemId}/restore`, { method: "POST", headers: authHeaders() });
     }
     apply();
     history.push({ undo: revert, redo: apply });
@@ -233,7 +239,7 @@ export default function App() {
 
     function apply(p) {
       setSections((sections) => sections.map((s) => (s.id !== sectionId ? s : { ...s, items: s.items.map((i) => (i.id === itemId ? { ...i, ...p } : i)) })));
-      fetch(`${API_URL}/api/boms/items/${itemId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify(p) });
+      apiFetch(`${API_URL}/api/boms/items/${itemId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify(p) });
     }
     apply(patch);
     history.push({ undo: () => apply(before), redo: () => apply(patch) });
@@ -249,7 +255,7 @@ export default function App() {
         const byId = Object.fromEntries(s.items.map((i) => [i.id, i]));
         return { ...s, items: ids.map((id) => byId[id]).filter(Boolean) };
       }));
-      fetch(`${API_URL}/api/boms/sections/${sectionId}/items/reorder`, {
+      apiFetch(`${API_URL}/api/boms/sections/${sectionId}/items/reorder`, {
         method: "PATCH",
         headers: jsonHeaders(),
         body: JSON.stringify({ orderedIds: ids }),
@@ -271,7 +277,7 @@ export default function App() {
         const sections = prev.sections.filter((s) => s.id !== sectionId);
         return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
       });
-      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "DELETE", headers: authHeaders() });
+      apiFetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "DELETE", headers: authHeaders() });
     }
     function revert() {
       setBom((prev) => {
@@ -279,7 +285,7 @@ export default function App() {
         sections.splice(Math.min(index, sections.length), 0, removedSection);
         return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
       });
-      fetch(`${API_URL}/api/boms/sections/${sectionId}/restore`, { method: "POST", headers: authHeaders() });
+      apiFetch(`${API_URL}/api/boms/sections/${sectionId}/restore`, { method: "POST", headers: authHeaders() });
     }
     apply();
     history.push({ undo: revert, redo: apply });
@@ -292,7 +298,7 @@ export default function App() {
 
     function apply(t) {
       setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, title: t } : s)));
-      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ title: t }) });
+      apiFetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ title: t }) });
     }
     apply(title);
     history.push({ undo: () => apply(before), redo: () => apply(title) });
@@ -305,7 +311,7 @@ export default function App() {
 
     function apply(e) {
       setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, emoji: e } : s)));
-      fetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ emoji: e || "" }) });
+      apiFetch(`${API_URL}/api/boms/sections/${sectionId}`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ emoji: e || "" }) });
     }
     apply(emoji);
     history.push({ undo: () => apply(before), redo: () => apply(emoji) });
@@ -320,7 +326,7 @@ export default function App() {
         const sections = ids.map((id) => byId[id]).filter(Boolean);
         return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
       });
-      fetch(`${API_URL}/api/boms/${bomRef.current.id}/sections/reorder`, {
+      apiFetch(`${API_URL}/api/boms/${bomRef.current.id}/sections/reorder`, {
         method: "PATCH",
         headers: jsonHeaders(),
         body: JSON.stringify({ orderedIds: ids }),
@@ -360,19 +366,13 @@ export default function App() {
     reorderSections(ids);
   }, [dragSectionId, reorderSections]);
 
-  function persistToken(t) {
-    try {
-      if (t) window.localStorage.setItem(TOKEN_STORAGE_KEY, t);
-      else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    } catch {
-      // localStorage unavailable — session just won't survive a refresh
-    }
-  }
+  // Authentication is kept in an HttpOnly cookie. The frontend never stores
+  // or receives the JWT, so there is no bearer token in localStorage or JS memory.
+  function persistToken() {}
 
-  function setSession(t, u) {
-    setToken(t);
+  function setSession(_token, u) {
+    setToken("session");
     setUser(u);
-    persistToken(t);
   }
 
   function toggleTheme() {
@@ -422,7 +422,10 @@ export default function App() {
     return () => clearInterval(interval);
   }, [justRegisteredEmail]);
 
-  function logout() {
+  async function logout() {
+    try {
+      await apiFetch(`${API_URL}/api/auth/logout`, { method: "POST" });
+    } catch {}
     setToken(null);
     setUser(null);
     setBom(null);
@@ -430,71 +433,44 @@ export default function App() {
     setEmail("");
     setPassword("");
     setConfirmPassword("");
-    persistToken(null);
   }
 
-  // On load, try to restore a session from a previously-saved token before
-  // rendering the login screen, so a refresh doesn't sign people out.
+  // On load, ask the API whether the HttpOnly session cookie is still valid.
   useEffect(() => {
     let cancelled = false;
-    let stored = null;
-    try {
-      stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
-    } catch {
-      // localStorage unavailable
-    }
-    if (!stored) {
-      setAuthChecking(false);
-      return;
-    }
-    setToken(stored);
-    fetch(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${stored}` } })
+    apiFetch(`${API_URL}/api/auth/me`)
       .then((r) => {
-        if (!r.ok) throw new Error("invalid session");
+        if (!r.ok) throw new Error("no session");
         return r.json();
       })
       .then((data) => {
         if (cancelled) return;
         if (data.user) {
+          setToken("session");
           setUser(data.user);
         } else {
           setToken(null);
-          persistToken(null);
+          setUser(null);
         }
       })
       .catch(() => {
         if (cancelled) return;
-        // Stored token is stale/invalid — clear it and fall back to login.
         setToken(null);
-        persistToken(null);
+        setUser(null);
       })
       .finally(() => {
         if (!cancelled) setAuthChecking(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // On load, check for ?verify_token= (link from verification email) or
-  // ?oauth_token=/?oauth_error= (redirect back from Google/GitHub) in the URL.
+  // On load, check for the email-verification link or an OAuth error.
+  // Successful OAuth callbacks set the HttpOnly session cookie on the API before redirecting here.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get("verify_token");
-    const oauthToken = params.get("oauth_token");
     const oauthError = params.get("oauth_error");
 
-    if (oauthToken) {
-      setSession(oauthToken, null);
-      fetch(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${oauthToken}` } })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.user) setUser(data.user);
-        })
-        .catch(() => {});
-      window.history.replaceState({}, "", window.location.pathname);
-      return;
-    }
     if (oauthError) {
       setAuthError(oauthError);
       window.history.replaceState({}, "", window.location.pathname);
@@ -503,7 +479,7 @@ export default function App() {
     if (!verifyToken) return;
 
     setVerifyStatus("checking");
-    fetch(`${API_URL}/api/auth/verify`, {
+    apiFetch(`${API_URL}/api/auth/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: verifyToken }),
@@ -552,14 +528,14 @@ export default function App() {
     setAuthError(null);
     setAuthLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const res = await apiFetch(`${API_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
-      if (data.token) {
-        setSession(data.token, data.user);
+      if (data.user) {
+        setSession(null, data.user);
       } else setAuthError(data.error || "Login failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
@@ -575,14 +551,14 @@ export default function App() {
     setAuthError(null);
     setAuthLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/auth/register`, {
+      const res = await apiFetch(`${API_URL}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const data = await res.json();
-      if (data.token) {
-        setSession(data.token, data.user);
+      if (data.user) {
+        setSession(null, data.user);
         setJustRegisteredEmail(email.trim());
       } else setAuthError(data.error || "Registration failed");
     } catch (e) {
@@ -595,9 +571,9 @@ export default function App() {
   async function resendVerification() {
     setResendStatus("sending");
     try {
-      const res = await fetch(`${API_URL}/api/auth/resend-verification`, {
+      const res = await apiFetch(`${API_URL}/api/auth/resend-verification`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { },
       });
       const data = await res.json();
       setResendStatus(data.sent ? "sent" : "error");
@@ -607,11 +583,10 @@ export default function App() {
   }
 
   async function createBom(title) {
-    const res = await fetch(`${API_URL}/api/boms`, {
+    const res = await apiFetch(`${API_URL}/api/boms`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ title: title || "Untitled BOM" }),
     });
@@ -631,8 +606,8 @@ export default function App() {
     // spinner forever with no error, no matter how many times you
     // clicked. This is what "click it, it just loads forever" was.
     try {
-      const res = await fetch(`${API_URL}/api/boms/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_URL}/api/boms/${id}`, {
+        headers: { },
       });
       if (!res.ok) {
         let message = `Failed to load BOM (${res.status})`;
@@ -659,8 +634,8 @@ export default function App() {
   // background, not from the user clicking to open a BOM.
   const pollBomQuietly = useCallback(async (id) => {
     try {
-      const res = await fetch(`${API_URL}/api/boms/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_URL}/api/boms/${id}`, {
+        headers: { },
       });
       if (res.ok) setBom(await res.json());
     } catch {
@@ -692,8 +667,8 @@ export default function App() {
   async function loadBomList() {
     setBomListLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/boms`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_URL}/api/boms`, {
+        headers: { },
       });
       setBomList(await res.json());
     } finally {
@@ -710,9 +685,9 @@ export default function App() {
     setTitleEditing(false);
     const next = titleDraft.trim();
     if (!next || next === bom.title) return;
-    await fetch(`${API_URL}/api/boms/${bom.id}`, {
+    await apiFetch(`${API_URL}/api/boms/${bom.id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", },
       body: JSON.stringify({ title: next }),
     });
     setBomList(null);
@@ -725,18 +700,18 @@ export default function App() {
     if (!Number.isFinite(pct) || pct < 0) return;
     const rate = Math.round((pct / 100) * 10000) / 10000; // matches NUMERIC(6,4)
     if (rate === Number(bom.tax_rate)) return;
-    await fetch(`${API_URL}/api/boms/${bom.id}`, {
+    await apiFetch(`${API_URL}/api/boms/${bom.id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", },
       body: JSON.stringify({ tax_rate: rate }),
     });
     loadBom(bom.id);
   }
 
   async function deleteBom(id) {
-    await fetch(`${API_URL}/api/boms/${id}`, {
+    await apiFetch(`${API_URL}/api/boms/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { },
     });
     loadBomList();
   }
@@ -746,7 +721,7 @@ export default function App() {
     // sort_order is intentionally omitted -- the backend now computes
     // "end of list" itself (see api/routes/boms.js), which is the fix
     // for new tables/rows landing in the wrong place.
-    const res = await fetch(`${API_URL}/api/boms/${bom.id}/sections`, {
+    const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/sections`, {
       method: "POST",
       headers: jsonHeaders(),
       body: JSON.stringify({ title: "New Table" }),
@@ -760,11 +735,11 @@ export default function App() {
           const sections = prev.sections.filter((s) => s.id !== newSection.id);
           return { ...prev, sections, totals: calculateTotals(allItems(sections), prev.tax_rate) };
         });
-        fetch(`${API_URL}/api/boms/sections/${newSection.id}`, { method: "DELETE", headers: authHeaders() });
+        apiFetch(`${API_URL}/api/boms/sections/${newSection.id}`, { method: "DELETE", headers: authHeaders() });
       },
       redo: () => {
         setBom((prev) => (prev ? { ...prev, sections: [...prev.sections, newSection] } : prev));
-        fetch(`${API_URL}/api/boms/sections/${newSection.id}/restore`, { method: "POST", headers: authHeaders() });
+        apiFetch(`${API_URL}/api/boms/sections/${newSection.id}/restore`, { method: "POST", headers: authHeaders() });
       },
     });
   }
@@ -782,9 +757,9 @@ export default function App() {
     setRefreshingFilter(filter);
     setSheetImportJustSucceeded(false);
     try {
-      const res = await fetch(`${API_URL}/api/boms/${bom.id}/refresh-items`, {
+      const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/refresh-items`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", },
         body: JSON.stringify({ filter }),
       });
       if (!res.ok) {
@@ -809,9 +784,9 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch(`${API_URL}/api/boms/${bom.id}/import-sheet`, {
+      const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/import-sheet`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { },
         body: formData,
       });
       if (!res.ok) {

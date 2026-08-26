@@ -1,4 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
+const getCsrfToken = () => document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("bom-csrf="))?.slice("bom-csrf=".length) || "";
+const apiFetch = (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const method = (options.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", getCsrfToken());
+  return fetch(url, { ...options, headers, credentials: "include" });
+};
 import { IconUnlock } from "./Icons.jsx";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
@@ -22,9 +29,9 @@ export default function CaptchaSolver({ item, token, onResolved }) {
     setError(null);
     setPhase("starting");
     try {
-      const res = await fetch(`${API_URL}/api/boms/items/${item.id}/request-captcha-refresh`, {
+      const res = await apiFetch(`${API_URL}/api/boms/items/${item.id}/request-captcha-refresh`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { },
       });
       if (!res.ok) throw new Error((await res.json()).error || "Failed to start");
       setPhase("waiting_for_screenshot");
@@ -37,8 +44,8 @@ export default function CaptchaSolver({ item, token, onResolved }) {
 
   function pollForScreenshot() {
     pollRef.current = setInterval(async () => {
-      const res = await fetch(`${API_URL}/api/boms/items/${item.id}/captcha`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_URL}/api/boms/items/${item.id}/captcha`, {
+        headers: { },
       });
       const data = await res.json();
       if (data.captcha_screenshot) {
@@ -52,9 +59,9 @@ export default function CaptchaSolver({ item, token, onResolved }) {
   async function submitAnswer() {
     if (!answer.trim()) return;
     setPhase("submitted");
-    await fetch(`${API_URL}/api/boms/items/${item.id}/captcha-solution`, {
+    await apiFetch(`${API_URL}/api/boms/items/${item.id}/captcha-solution`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", },
       body: JSON.stringify({ solution: answer.trim() }),
     });
     pollForResolution();
@@ -62,8 +69,8 @@ export default function CaptchaSolver({ item, token, onResolved }) {
 
   function pollForResolution() {
     pollRef.current = setInterval(async () => {
-      const res = await fetch(`${API_URL}/api/boms/items/${item.id}/captcha`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await apiFetch(`${API_URL}/api/boms/items/${item.id}/captcha`, {
+        headers: { },
       });
       const data = await res.json();
       if (!data.captcha_status) {

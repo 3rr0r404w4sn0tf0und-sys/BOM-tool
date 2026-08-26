@@ -20,6 +20,8 @@ async function getBomByApiKey(req, res, next) {
   if (!bom) return res.status(401).json({ error: "Invalid API key" });
 
   req.bom = bom;
+  pool.query("UPDATE boms SET public_api_key_last_used_at = now() WHERE id = $1", [bom.id])
+    .catch((err) => console.error("API key last-used update failed:", err));
   next();
 }
 

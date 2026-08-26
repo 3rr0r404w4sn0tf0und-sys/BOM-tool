@@ -12,6 +12,28 @@ CREATE TABLE users (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_sessions_active ON sessions(user_id, expires_at) WHERE revoked_at IS NULL;
+
+CREATE TABLE audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status_code INT NOT NULL,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_audit_logs_user_created ON audit_logs(user_id, created_at DESC);
+
 -- One BOM = one document a user builds (can have many sections)
 CREATE TABLE boms (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,6 +41,7 @@ CREATE TABLE boms (
     title TEXT NOT NULL DEFAULT 'Untitled BOM',
     tax_rate NUMERIC(6,4) NOT NULL DEFAULT 0, -- e.g. 0.08 for Philly
     public_api_key TEXT UNIQUE, -- used by Odoo / external calls
+    public_api_key_last_used_at TIMESTAMPTZ,
     zip_code TEXT, -- optional, used for location-accurate Amazon pricing via Apify
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
@@ -32,7 +55,9 @@ CREATE TABLE sections (
     emoji TEXT,              -- unicode emoji, e.g. "🔋"
     icon_url TEXT,           -- optional custom drawn icon, overrides emoji if set
     sort_order INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT now()
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT sections_sort_order_nonnegative CHECK (sort_order >= 0)
 );
 
 -- Individual BOM line items
@@ -55,7 +80,12 @@ CREATE TABLE items (
     font_size INT NOT NULL DEFAULT 19,
     sort_order INT NOT NULL DEFAULT 0,
     last_checked TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now()
+    deleted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT items_qty_nonnegative CHECK (qty >= 0),
+    CONSTRAINT items_unit_price_nonnegative CHECK (unit_price IS NULL OR unit_price >= 0),
+    CONSTRAINT items_font_size_reasonable CHECK (font_size BETWEEN 8 AND 96),
+    CONSTRAINT items_sort_order_nonnegative CHECK (sort_order >= 0)
 );
 
 CREATE INDEX idx_sections_bom_id ON sections(bom_id);
