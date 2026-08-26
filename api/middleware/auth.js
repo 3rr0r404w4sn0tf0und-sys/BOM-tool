@@ -103,6 +103,7 @@ export function requireAuth(req, res, next) {
 // state. Relies on getSessionFromRequest rather than req.sessionId so it
 // works standalone on routes (e.g. /auth/logout) that don't run requireAuth.
 export function requireCsrf(req, res, next) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   getSessionFromRequest(req)
     .then((auth) => {
       if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
