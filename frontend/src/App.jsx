@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { API_URL, apiFetch } from "./api.js";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";

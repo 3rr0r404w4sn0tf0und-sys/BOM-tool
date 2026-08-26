@@ -98,7 +98,13 @@ def main():
     results = {}
 
     if amazon_rows:
-        results.update(try_apify_scrape_batch([r["url"] for r in amazon_rows]))
+        amazon_urls = [r["url"] for r in amazon_rows]
+        amazon_results = try_apify_scrape_batch(amazon_urls)
+        print(f"Amazon: {sum(1 for u in amazon_urls if amazon_results.get(u, {}).get('found'))}/{len(amazon_urls)} prices found")
+        for u in amazon_urls:
+            if not amazon_results.get(u, {}).get("found"):
+                print(f"  Amazon FAILED: {u} -> {amazon_results.get(u, {}).get('error', 'unknown error')}")
+        results.update(amazon_results)
 
     if mouser_rows:
         mouser_urls = [r["url"] for r in mouser_rows]
@@ -108,6 +114,10 @@ def main():
             print(f"Dedicated Mouser Actor found {len(mouser_urls) - len(leftover)}/{len(mouser_urls)}; "
                   f"trying generic Apify scrape for the remaining {len(leftover)}")
             mouser_results.update(try_apify_generic_scrape_batch(leftover))
+        print(f"Mouser: {sum(1 for u in mouser_urls if mouser_results.get(u, {}).get('found'))}/{len(mouser_urls)} prices found")
+        for u in mouser_urls:
+            if not mouser_results.get(u, {}).get("found"):
+                print(f"  Mouser FAILED: {u} -> {mouser_results.get(u, {}).get('error', 'unknown error')}")
         results.update(mouser_results)
 
     refreshed = 0

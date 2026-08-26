@@ -17,6 +17,8 @@ name can be added once seen.
 
 import os
 import requests
+from urllib.parse import urlparse
+import re
 
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 APIFY_ACTOR_ID = os.environ.get("APIFY_AMAZON_ACTOR_ID")
@@ -54,12 +56,46 @@ def _extract_price(item: dict):
 
 
 def _extract_url(item: dict, fallback: str = None):
-    for key in ("url", "inputUrl", "productUrl", "canonicalUrl"):
+    for key in ("url", "inputUrl", "productUrl", "canonicalUrl", "detailUrl", "product_url"):
         val = item.get(key)
         if isinstance(val, str) and val:
             return val
     return fallback
 
+
+def _amazon_asin(url: str):
+    if not isinstance(url, str):
+        return None
+    m = re.search(r"/(?:dp|gp/product|gp/aw/d|dp/product)/([A-Z0-9]{10})(?:[/?#]|$)", url, re.I)
+    return m.group(1).upper() if m else None
+
+
+def _normalize_url(url: str):
+    if not isinstance(url, str) or not url:
+        return ""
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/") or "/"
+    return f"{host}{path}"
+
+
+def _match_input_url(returned_url: str, input_urls: list, used: set):
+    # 1) Exact/normalized URL match.
+    if returned_url:
+        if returned_url in input_urls and returned_url not in used:
+            return returned_url
+        norm = _normalize_url(returned_url)
+        for u in input_urls:
+            if u not in used and _normalize_url(u) == norm:
+                return u
+        # 2) Amazon canonical URL commonly changes from a long product URL
+        #    to /dp/<ASIN>. Match by ASIN so a valid Apify result is not lost.
+        asin = _amazon_asin(returned_url)
+        if asin:
+            for u in input_urls:
+                if u not in used and _amazon_asin(u) == asin:
+                    return u
+    return None
 
 def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -> dict:
     results = try_apify_scrape_batch([url], zip_code=zip_code, country_code=country_code)
@@ -127,16 +163,29 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
         return {u: error for u in urls}
 
     results = {}
+    used = set()
     for i, item in enumerate(items):
-        fallback_url = urls[i] if i < len(urls) else None
-        matched_url = _extract_url(item, fallback_url)
+        returned_url = _extract_url(item)
+        matched_url = _match_input_url(returned_url, urls, used)
+        # If the Actor omitted a URL, a single-item run can safely use its
+        # sole input; for multi-item runs, preserve input order as a last
+        # resort because the Actor accepts one result per start URL.
+        if not matched_url and not returned_url:
+            remaining = [u for u in urls if u not in used]
+            if len(remaining) == 1:
+                matched_url = remaining[0]
+            elif i < len(urls) and urls[i] not in used:
+                matched_url = urls[i]
         if not matched_url:
+            print(f"DEBUG: could not match Apify result to an input URL; returned_url={returned_url!r}, item={item}")
             continue
+        used.add(matched_url)
         price = _extract_price(item)
         if price is None:
             print(f"DEBUG: no known price field found for {matched_url}, raw item: {item}")
             results[matched_url] = {"found": False, "error": "Apify result had no recognizable price field"}
         else:
+            print(f"Amazon Apify: matched {matched_url} -> ${price}")
             results[matched_url] = {"found": True, "price": price, "source": "apify"}
 
     for u in urls:

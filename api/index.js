@@ -8,7 +8,7 @@ import { authRouter } from "./routes/auth.js";
 import { bomsRouter } from "./routes/boms.js";
 import { publicRouter } from "./routes/public.js";
 import { internalRouter } from "./routes/internal.js";
-import { ensureCsrfCookie, requireAllowedOrigin } from "./middleware/auth.js";
+import { requireAllowedOrigin } from "./middleware/auth.js";
 import { auditMutations } from "./middleware/audit.js";
 
 const app = express();
@@ -37,7 +37,6 @@ app.use(cors({
   credentials: true,
 }));
 app.use(cookieParser());
-app.use(ensureCsrfCookie);
 app.use(requireAllowedOrigin);
 app.use(auditMutations);
 app.use(express.json({ limit: "1mb" }));

@@ -52,7 +52,7 @@ def _extract_price(item: dict):
     """Try several likely field names/shapes -- single unit price, or
     the first entry of a price-break/tier list, whichever the Actor
     actually returns (unconfirmed until seen on a live run)."""
-    for key in ("unitPrice", "price", "priceBreaks", "pricingTiers", "prices"):
+    for key in ("unitPriceValue", "unitPrice", "price", "priceBreaks", "pricingTiers", "prices"):
         val = item.get(key)
         if val is None:
             continue
@@ -67,30 +67,64 @@ def _extract_price(item: dict):
                     continue
         if isinstance(val, dict):
             # e.g. {"price": 449.00, "qty": 1} or {"value": 449.00}
-            for subkey in ("price", "value", "unitPrice"):
+            for subkey in ("unitPriceValue", "price", "value", "unitPrice"):
                 if subkey in val:
                     return _extract_price({subkey: val[subkey]})
         if isinstance(val, list) and val:
             # Price-break tiers -- take the qty=1 / first tier's price.
             first = val[0]
             if isinstance(first, dict):
-                for subkey in ("price", "unitPrice", "value"):
+                for subkey in ("unitPriceValue", "price", "unitPrice", "value"):
                     if subkey in first:
                         return _extract_price({subkey: first[subkey]})
     return None
 
 
 def _extract_url(item: dict, fallback: str = None):
-    """Match a returned dataset item back to the input url it came from.
-    Field name isn't confirmed (see module docstring), so try the likely
-    candidates; fall back to whatever url the caller supplies (e.g. by
-    position) if none of them are present."""
-    for key in ("url", "productUrl", "link", "sourceUrl"):
+    for key in ("url", "productUrl", "link", "sourceUrl", "productURL", "product_url"):
         val = item.get(key)
         if isinstance(val, str) and val:
             return val
     return fallback
 
+
+def _normalize_url(url: str):
+    if not isinstance(url, str) or not url:
+        return ""
+    from urllib.parse import urlparse
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/") or "/"
+    return f"{host}{path}"
+
+
+def _mouser_product_key(url: str):
+    if not isinstance(url, str):
+        return None
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.split("/") if p]
+    if "productdetail" in [p.lower() for p in parts]:
+        i = next((i for i,p in enumerate(parts) if p.lower() == "productdetail"), -1)
+        if i >= 0 and i + 1 < len(parts):
+            return parts[i + 1].lower()
+    return None
+
+
+def _match_input_url(returned_url: str, input_urls: list, used: set):
+    if returned_url:
+        if returned_url in input_urls and returned_url not in used:
+            return returned_url
+        norm = _normalize_url(returned_url)
+        for u in input_urls:
+            if u not in used and _normalize_url(u) == norm:
+                return u
+        key = _mouser_product_key(returned_url)
+        if key:
+            for u in input_urls:
+                if u not in used and _mouser_product_key(u) == key:
+                    return u
+    return None
 
 def try_apify_mouser_scrape(url: str) -> dict:
     results = try_apify_mouser_scrape_batch([url])
@@ -133,20 +167,26 @@ def try_apify_mouser_scrape_batch(urls: list) -> dict:
         return {u: error for u in urls}
 
     results = {}
-    # Best-effort match by an explicit url-ish field; if the Actor's
-    # dataset item doesn't carry one (unconfirmed schema, see docstring
-    # above), fall back to positional matching -- the Actor is expected
-    # to preserve input order for a plain productUrls list.
+    used = set()
     for i, item in enumerate(items):
-        fallback_url = urls[i] if i < len(urls) else None
-        matched_url = _extract_url(item, fallback_url)
+        returned_url = _extract_url(item)
+        matched_url = _match_input_url(returned_url, urls, used)
+        if not matched_url and not returned_url:
+            remaining = [u for u in urls if u not in used]
+            if len(remaining) == 1:
+                matched_url = remaining[0]
+            elif i < len(urls) and urls[i] not in used:
+                matched_url = urls[i]
         if not matched_url:
+            print(f"DEBUG: could not match Mouser Apify result; returned_url={returned_url!r}, item={item}")
             continue
+        used.add(matched_url)
         price = _extract_price(item)
         if price is None:
             print(f"DEBUG: Apify Mouser scrape found no known price field for {matched_url}, raw item: {item}")
             results[matched_url] = {"found": False, "error": "Apify Mouser result had no recognizable price field"}
         else:
+            print(f"Mouser Apify: matched {matched_url} -> ${price}")
             results[matched_url] = {"found": True, "price": price, "source": "apify_mouser"}
 
     for u in urls:
