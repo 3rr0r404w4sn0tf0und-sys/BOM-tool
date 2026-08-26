@@ -162,8 +162,19 @@ def try_apify_mouser_scrape_batch(urls: list) -> dict:
         resp = requests.post(endpoint, json=run_input, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
+    except requests.HTTPError as e:
+        body = ""
+        try:
+            body = resp.text[:300]
+        except Exception:
+            pass
+        error = {
+            "found": False,
+            "error": f"Apify Mouser request failed: {e} (actor: {APIFY_MOUSER_ACTOR_ID}, response: {body})",
+        }
+        return {u: error for u in urls}
     except Exception as e:
-        error = {"found": False, "error": f"Apify Mouser request failed: {e}"}
+        error = {"found": False, "error": f"Apify Mouser request failed: {e} (actor: {APIFY_MOUSER_ACTOR_ID})"}
         return {u: error for u in urls}
 
     results = {}
@@ -183,8 +194,12 @@ def try_apify_mouser_scrape_batch(urls: list) -> dict:
         used.add(matched_url)
         price = _extract_price(item)
         if price is None:
+            keys = ", ".join(sorted(item.keys())) or "(empty item)"
             print(f"DEBUG: Apify Mouser scrape found no known price field for {matched_url}, raw item: {item}")
-            results[matched_url] = {"found": False, "error": "Apify Mouser result had no recognizable price field"}
+            results[matched_url] = {
+                "found": False,
+                "error": f"Apify Mouser result had no recognizable price field (item keys: {keys})",
+            }
         else:
             print(f"Mouser Apify: matched {matched_url} -> ${price}")
             results[matched_url] = {"found": True, "price": price, "source": "apify_mouser"}

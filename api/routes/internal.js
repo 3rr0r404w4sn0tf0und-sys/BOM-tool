@@ -41,6 +41,10 @@ internalRouter.post("/scrape-result", requireInternalSecret, asyncHandler(async 
   else if (keepOldPrice && item.unit_price !== null) status = "ok";
   else if (error && String(error).toLowerCase().includes("link_failed")) status = "link_failed";
 
+  // Truncate defensively -- this is a diagnostic string from an external
+  // API response, not something we want able to bloat a row indefinitely.
+  const errorText = found ? null : (error ? String(error).slice(0, 500) : null);
+
   const result = await pool.query(
     `UPDATE items SET
        unit_price = CASE WHEN $1 THEN $2 WHEN $6 AND $3 = 'ok' THEN unit_price ELSE NULL END,
@@ -48,10 +52,11 @@ internalRouter.post("/scrape-result", requireInternalSecret, asyncHandler(async 
        source = CASE WHEN $1 THEN $4 ELSE source END,
        last_checked = now(),
        stale_price = CASE WHEN $1 THEN false WHEN $6 THEN true ELSE false END,
+       last_error = $8,
        scrape_job_id = NULL
      WHERE id = $5 AND scrape_job_id = $7
      RETURNING *`,
-    [Boolean(found), numericPrice, status, source || null, item_id, keepOldPrice, job_id]
+    [Boolean(found), numericPrice, status, source || null, item_id, keepOldPrice, job_id, errorText]
   );
 
   if (!result.rows[0]) return res.status(409).json({ error: "Stale scrape result ignored" });

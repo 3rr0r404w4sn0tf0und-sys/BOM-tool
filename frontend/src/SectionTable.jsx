@@ -214,7 +214,10 @@ function CostCell({ item, theme, onResolved }) {
             </span>
           )}
           {item.stale_price && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: theme.warnText }}>
+            <span
+              title={item.last_error ? `Last refresh failed: ${item.last_error}` : "Last refresh failed; showing last known price"}
+              style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: theme.warnText, cursor: "help" }}
+            >
               <IconWarning size={11} color={theme.warnText} /> stale
             </span>
           )}
@@ -235,7 +238,10 @@ function CostCell({ item, theme, onResolved }) {
   }
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.errText }}>
+      <span
+        title={item.last_error || "Scrape failed for an unknown reason"}
+        style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: theme.errText, cursor: item.last_error ? "help" : "default" }}
+      >
         <IconWarning size={12} color={theme.errText} /> failed
       </span>
       <RefreshButton item={item} theme={theme} onRefresh={onResolved} />

@@ -115,7 +115,11 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
         return {}
 
     if not APIFY_TOKEN or not APIFY_ACTOR_ID:
-        error = {"found": False, "error": "Apify not configured (missing token/actor id)"}
+        missing = ", ".join(
+            name for name, val in (("APIFY_TOKEN", APIFY_TOKEN), ("APIFY_AMAZON_ACTOR_ID", APIFY_ACTOR_ID))
+            if not val
+        )
+        error = {"found": False, "error": f"Apify not configured (missing env var(s): {missing})"}
         return {u: error for u in urls}
 
     endpoint = (
@@ -158,8 +162,19 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
         resp = requests.post(endpoint, json=run_input, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
+    except requests.HTTPError as e:
+        body = ""
+        try:
+            body = resp.text[:300]
+        except Exception:
+            pass
+        error = {
+            "found": False,
+            "error": f"Apify request failed: {e} (actor: {APIFY_ACTOR_ID}, response: {body})",
+        }
+        return {u: error for u in urls}
     except Exception as e:
-        error = {"found": False, "error": f"Apify request failed: {e}"}
+        error = {"found": False, "error": f"Apify request failed: {e} (actor: {APIFY_ACTOR_ID})"}
         return {u: error for u in urls}
 
     results = {}
@@ -182,8 +197,12 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
         used.add(matched_url)
         price = _extract_price(item)
         if price is None:
+            keys = ", ".join(sorted(item.keys())) or "(empty item)"
             print(f"DEBUG: no known price field found for {matched_url}, raw item: {item}")
-            results[matched_url] = {"found": False, "error": "Apify result had no recognizable price field"}
+            results[matched_url] = {
+                "found": False,
+                "error": f"Apify result had no recognizable price field (item keys: {keys})",
+            }
         else:
             print(f"Amazon Apify: matched {matched_url} -> ${price}")
             results[matched_url] = {"found": True, "price": price, "source": "apify"}

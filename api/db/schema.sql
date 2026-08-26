@@ -73,6 +73,7 @@ CREATE TABLE items (
     status TEXT NOT NULL DEFAULT 'pending', -- pending | ok | link_failed | price_not_found
     source TEXT,                         -- og_meta | json_ld | pricing_table | apify | manual
     stale_price BOOLEAN NOT NULL DEFAULT false, -- true when a protected-store refresh failed and the old price was kept
+    last_error TEXT,                      -- reason for the most recent scrape failure, shown in the UI on hover
     scrape_job_id UUID,                   -- active GitHub Actions scrape; callbacks must match it
     bold BOOLEAN NOT NULL DEFAULT false,
     italic BOOLEAN NOT NULL DEFAULT false,
