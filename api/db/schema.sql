@@ -11,6 +11,7 @@ CREATE TABLE users (
     verification_token_expires TIMESTAMPTZ,
     oauth_provider TEXT,
     oauth_id TEXT,
+    apify_token_encrypted TEXT, -- user's own Apify API token (AES-256-GCM), lets them scrape on their own account instead of the shared one
     created_at TIMESTAMPTZ DEFAULT now()
 );
 

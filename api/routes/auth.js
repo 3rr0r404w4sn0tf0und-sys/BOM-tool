@@ -6,6 +6,7 @@ import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { setAuthCookie, clearAuthCookie, requireCsrf, getAuthToken, createSession, revokeSession, issueSessionToken, getSessionFromRequest, getCsrfTokenForSession } from "../middleware/auth.js";
+import { encryptSecret } from "../lib/secretCrypto.js";
 
 export const authRouter = express.Router();
 const verificationResendLimiter = rateLimit({
@@ -171,12 +172,41 @@ authRouter.get("/me", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
   const result = await pool.query(
-    "SELECT id, email, email_verified FROM users WHERE id = $1",
+    "SELECT id, email, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
     [auth.payload.userId]
   );
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json({ user, csrfToken: getCsrfTokenForSession(auth.payload.sid) });
+}));
+
+// A user's own Apify token, so BOM scrapes run against their Apify account
+// (and their usage/billing). There is no shared/site-wide Apify token --
+// without one set here, Apify-tier scrapes (Mouser, Arrow, Amazon) just
+// fall back to the plain HTTP fetch path and may come back price_not_found.
+// Never returned in plaintext once saved -- GET only reports whether one is
+// set, matching how public_api_key etc. are handled elsewhere.
+authRouter.put("/apify-key", requireCsrf, asyncHandler(async (req, res) => {
+  const { token } = req.body || {};
+  if (typeof token !== "string" || !token.trim()) {
+    return res.status(400).json({ error: "token is required" });
+  }
+  const trimmed = token.trim();
+  if (trimmed.length > 500) return res.status(400).json({ error: "token is too long" });
+  let encrypted;
+  try {
+    encrypted = encryptSecret(trimmed);
+  } catch (e) {
+    console.error("Failed to encrypt Apify token:", e);
+    return res.status(500).json({ error: "Server is not configured to store this securely" });
+  }
+  await pool.query("UPDATE users SET apify_token_encrypted = $1 WHERE id = $2", [encrypted, req.userId]);
+  res.json({ hasApifyToken: true });
+}));
+
+authRouter.delete("/apify-key", requireCsrf, asyncHandler(async (req, res) => {
+  await pool.query("UPDATE users SET apify_token_encrypted = NULL WHERE id = $1", [req.userId]);
+  res.json({ hasApifyToken: false });
 }));
 
 authRouter.get("/csrf", asyncHandler(async (req, res) => {

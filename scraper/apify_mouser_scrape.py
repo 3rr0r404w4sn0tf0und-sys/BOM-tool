@@ -15,10 +15,16 @@ the DOM sidesteps that entirely, which is a materially different (and
 more reliable) approach for this one site -- worth trying first, with
 the existing generic Puppeteer scrape kept as the next fallback.
 
+There is no shared/site-wide APIFY_TOKEN secret -- each user brings their
+own Apify token (Settings -> Apify API key), passed through per-request
+from the API. Without one set, this reports "Apify not configured" and
+the caller falls back to the generic Apify scrape, then plain HTTP.
+
 You'll need:
-1. An Apify account (same one already used for APIFY_TOKEN).
+1. An Apify account (same one already used for the Amazon Actor).
 2. APIFY_MOUSER_ACTOR_ID set to "crawloop/mouser-product-scraper" (or
-   its Actor ID, PA69eu9d2uDx1daiw) as a GitHub Actions secret/variable.
+   its Actor ID, PA69eu9d2uDx1daiw) as a GitHub Actions secret/variable
+   (shared config, not a per-user credential).
 
 Input schema confirmed from the Actor's real input UI:
   {

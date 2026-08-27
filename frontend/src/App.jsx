@@ -7,6 +7,7 @@ import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
+import ApifyKeyModal from "./ApifyKeyModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 import { calculateTotals, allItems } from "./totals.js";
@@ -50,6 +51,7 @@ export default function App() {
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
+  const [showApifyKeyModal, setShowApifyKeyModal] = useState(false);
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
   const [sheetImportJustSucceeded, setSheetImportJustSucceeded] = useState(false);
@@ -949,6 +951,8 @@ export default function App() {
             onToggleTheme={toggleTheme}
             isLoggedIn={true}
             onLogout={logout}
+            hasApifyToken={!!user?.has_apify_token}
+            onManageApifyKey={() => setShowApifyKeyModal(true)}
           />
         </div>
 
@@ -1245,6 +1249,15 @@ export default function App() {
                     prev ? prev.map((b) => (b.id === updated.id ? { ...b, public_api_key: updated.public_api_key } : b)) : prev
                   );
                 }}
+              />
+            )}
+
+            {showApifyKeyModal && (
+              <ApifyKeyModal
+                theme={theme}
+                hasApifyToken={!!user?.has_apify_token}
+                onClose={() => setShowApifyKeyModal(false)}
+                onSaved={(hasToken) => setUser((u) => (u ? { ...u, has_apify_token: hasToken } : u))}
               />
             )}
 

@@ -20,11 +20,17 @@ deliberately minimal --
   - useChrome: false              -- cheaper bundled Chromium is enough
 to keep each call as close to the Amazon-scrape cost as possible.
 
+There is no shared/site-wide APIFY_TOKEN secret -- each user brings their
+own Apify token (Settings -> Apify API key on the site), passed through
+per-request from the API as client_payload.apify_token. If a user hasn't
+set one, this reports "Apify not configured" and the caller falls back to
+a plain HTTP fetch instead.
+
 You'll need:
 1. An Apify account (same one used for the Amazon Actor is fine).
-2. APIFY_TOKEN already set (shared with apify_scrape.py).
-3. APIFY_PUPPETEER_ACTOR_ID set to "apify/puppeteer-scraper" (or its
-   Actor ID) as a GitHub Actions secret/variable.
+2. APIFY_PUPPETEER_ACTOR_ID set to "apify/puppeteer-scraper" (or its
+   Actor ID) as a GitHub Actions secret/variable (shared config, not a
+   per-user credential).
 """
 
 import os

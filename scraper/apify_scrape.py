@@ -3,10 +3,19 @@ Apify-based Amazon price lookup. Uses Apify's hosted "run sync and get
 dataset items" endpoint against the junglee/amazon-crawler Actor -- Apify
 maintains the anti-bot handling, we just call it and read the price back.
 
-You'll need to:
+There is no shared/site-wide APIFY_TOKEN secret -- each user brings their
+own Apify token (Settings -> Apify API key on the site), which the API
+passes through per-request as client_payload.apify_token on the GitHub
+Actions dispatch and the workflow maps to this env var. If a user hasn't
+set one, APIFY_TOKEN is simply unset here and this module reports "Apify
+not configured" -- the caller (actions_scrape_one.py) falls back to a
+plain HTTP fetch.
+
+To set up your own Apify Actor for this to call:
 1. Sign up at apify.com (free, no card).
 2. Note the Actor ID "junglee/amazon-crawler" (or your chosen Amazon Actor).
-3. Set APIFY_TOKEN and APIFY_AMAZON_ACTOR_ID as GitHub Actions secrets.
+3. Set APIFY_AMAZON_ACTOR_ID as a GitHub Actions secret/variable (this one
+   IS shared config, not a per-user credential).
 
 Input schema below matches the Actor's confirmed schema (verified against
 real Actor input, not guessed). Field names in the returned DATASET item

@@ -94,13 +94,15 @@ export function parseSheet(buffer) {
 }
 
 // Builds a .xlsx buffer in the same fixed column layout parseSheet() reads:
-//   A: item name, as a hyperlink to its product URL when it has one
-//   B: left blank (name-override column on import; nothing to override here)
+//   A: item link -- the URL itself as the cell's visible text, also set as
+//      a real hyperlink. Blank when the item has no URL.
+//   B: item name
 //   C: quantity
 //   D: left blank (ignored on import)
 // A section becomes a header row (text in A, nothing in C) followed by its
-// item rows, so a BOM exported here can be re-imported unchanged via
-// POST /:bomId/import-sheet.
+// item rows, with a blank separator row after each section -- so a BOM
+// with multiple sections exports as multiple clearly-divided tables, and
+// re-imports unchanged via POST /:bomId/import-sheet.
 export function buildSheetFromBom(bom) {
   const rows = [];
   const merges = [];
@@ -108,7 +110,7 @@ export function buildSheetFromBom(bom) {
     merges.push({ s: { r: rows.length, c: 0 }, e: { r: rows.length, c: 3 } });
     rows.push([section.title || "Untitled Section", "", "", ""]);
     for (const item of section.items || []) {
-      rows.push([item.name || "", "", Number(item.qty) || 1, ""]);
+      rows.push([item.url || "", item.name || "", Number(item.qty) || 1, ""]);
     }
     rows.push(["", "", "", ""]); // blank separator row between sections
   }
@@ -117,8 +119,9 @@ export function buildSheetFromBom(bom) {
   worksheet["!cols"] = [{ wch: 48 }, { wch: 24 }, { wch: 10 }, { wch: 10 }];
   if (merges.length) worksheet["!merges"] = merges;
 
-  // Attach hyperlinks to column A for item rows that have a URL, mirroring
-  // the cell.l.Target shape parseSheet() reads back on import.
+  // Attach real hyperlinks to column A for item rows that have a URL, on
+  // top of the plain-text URL already in the cell value, mirroring the
+  // cell.l.Target shape parseSheet() reads back on import.
   let r = 0;
   for (const section of bom.sections || []) {
     r += 1; // header row, no link

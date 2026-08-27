@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { pool } from "../db/pool.js";
 import { validateProductUrl } from "./urlValidation.js";
+import { decryptSecret } from "./secretCrypto.js";
 
 async function githubDispatch(event_type, client_payload) {
   const ghRepo = process.env.GITHUB_REPO;
@@ -19,6 +20,27 @@ async function githubDispatch(event_type, client_payload) {
   if (!resp.ok) throw new Error(`GitHub dispatch failed (${resp.status}): ${await resp.text()}`);
 }
 
+// Looks up and decrypts the BOM owner's own Apify token, if they've set
+// one. Returns undefined (not null) when absent so it's easy to spread/
+// omit from a client_payload object rather than sending an explicit null.
+// There is no shared/site-wide Apify token anymore -- every user brings
+// their own (Settings -> Apify API key). If this returns undefined, the
+// workflow simply has no Apify token to work with: apify_scrape.py etc.
+// report "Apify not configured" and actions_scrape_one.py falls back to
+// the plain HTTP fetch path, same as any other Apify failure.
+async function getOwnerApifyToken(userId) {
+  if (!userId) return undefined;
+  const result = await pool.query("SELECT apify_token_encrypted FROM users WHERE id = $1", [userId]);
+  const encrypted = result.rows[0]?.apify_token_encrypted;
+  if (!encrypted) return undefined;
+  try {
+    return decryptSecret(encrypted) || undefined;
+  } catch (e) {
+    console.error("Failed to decrypt user's Apify token:", e);
+    return undefined;
+  }
+}
+
 export async function triggerScrape(itemId, url) {
   validateProductUrl(url);
   const jobId = crypto.randomUUID();
@@ -27,11 +49,20 @@ export async function triggerScrape(itemId, url) {
     [itemId, jobId]
   );
   try {
+    const ownerResult = await pool.query(
+      `SELECT boms.user_id FROM items
+       JOIN sections ON items.section_id = sections.id
+       JOIN boms ON sections.bom_id = boms.id
+       WHERE items.id = $1`,
+      [itemId]
+    );
+    const apifyToken = await getOwnerApifyToken(ownerResult.rows[0]?.user_id);
     await githubDispatch("scrape-request", {
       item_id: itemId,
       job_id: jobId,
       url,
       callback_url: `${process.env.API_PUBLIC_URL}/api/internal/scrape-result`,
+      ...(apifyToken ? { apify_token: apifyToken } : {}),
     });
     return jobId;
   } catch (error) {
@@ -61,10 +92,13 @@ export async function triggerBatchScrape(bomId, filter) {
   );
 
   try {
+    const ownerResult = await pool.query("SELECT user_id FROM boms WHERE id = $1", [bomId]);
+    const apifyToken = await getOwnerApifyToken(ownerResult.rows[0]?.user_id);
     await githubDispatch("bom-batch-scrape-request", {
       bom_id: bomId,
       filter,
       job_id: jobId,
+      ...(apifyToken ? { apify_token: apifyToken } : {}),
     });
     return { triggered: pendingResult.rows.length, jobId };
   } catch (error) {
