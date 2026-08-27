@@ -6,7 +6,7 @@ import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireCsrf } from "../middleware/auth.js";
 import { calculateTotals } from "../db/totals.js";
-import { parseSheet } from "../lib/sheetImport.js";
+import { parseSheet, buildSheetFromBom } from "../lib/sheetImport.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { optionalString, optionalNumber, optionalBoolean } from "../lib/validation.js";
 import { validateProductUrl } from "../lib/urlValidation.js";
@@ -356,6 +356,53 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
   } finally {
     client.release();
   }
+}));
+
+// GET /api/boms/:bomId/export-sheet
+// Downloads the BOM as a .xlsx in the same fixed column layout import-sheet
+// reads, so it round-trips: export, edit in a spreadsheet app, re-import.
+bomsRouter.get("/:bomId/export-sheet", asyncHandler(async (req, res) => {
+  const bomResult = await pool.query(
+    "SELECT * FROM boms WHERE id = $1 AND user_id = $2",
+    [req.params.bomId, req.userId]
+  );
+  const bom = bomResult.rows[0];
+  if (!bom) return res.status(404).json({ error: "BOM not found" });
+
+  const [sectionsResult, itemsResult] = await Promise.all([
+    pool.query(
+      `SELECT * FROM sections WHERE bom_id = $1 AND deleted_at IS NULL
+       ORDER BY sort_order, created_at, id`,
+      [bom.id]
+    ),
+    pool.query(
+      `SELECT items.* FROM items
+       JOIN sections ON items.section_id = sections.id
+       WHERE sections.bom_id = $1 AND sections.deleted_at IS NULL AND items.deleted_at IS NULL
+       ORDER BY items.sort_order, items.created_at, items.id`,
+      [bom.id]
+    ),
+  ]);
+  const itemsBySection = new Map();
+  for (const item of itemsResult.rows) {
+    const bucket = itemsBySection.get(item.section_id);
+    if (bucket) bucket.push(item);
+    else itemsBySection.set(item.section_id, [item]);
+  }
+  const sectionsWithItems = sectionsResult.rows.map((s) => ({
+    ...s,
+    items: itemsBySection.get(s.id) || [],
+  }));
+
+  const buffer = buildSheetFromBom({ ...bom, sections: sectionsWithItems });
+
+  // Keep the download filename readable but safe -- strip anything that
+  // isn't a plain filename character so a crafted BOM title can't inject
+  // extra header syntax into Content-Disposition.
+  const safeTitle = (bom.title || "BOM").replace(/[^a-z0-9 _-]/gi, "").trim().slice(0, 80) || "BOM";
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.xlsx"`);
+  res.send(buffer);
 }));
 
 bomsRouter.post("/:bomId/refresh-items", scrapeLimiter, asyncHandler(async (req, res) => {

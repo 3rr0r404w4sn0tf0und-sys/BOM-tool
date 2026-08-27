@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import express from "express";
 import { pool } from "../db/pool.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -5,11 +6,19 @@ import { hostnameMatches } from "../lib/urlValidation.js";
 
 export const internalRouter = express.Router();
 
+// Constant-time comparison, same approach as the CSRF check in
+// middleware/auth.js -- a plain !== leaks timing info about how many
+// leading bytes of the secret an attacker has guessed correctly.
 function requireInternalSecret(req, res, next) {
-  const secret = req.header("X-Internal-Secret");
-  if (!secret || !process.env.INTERNAL_SCRAPE_SECRET || secret !== process.env.INTERNAL_SCRAPE_SECRET) {
-    return res.status(401).json({ error: "Invalid internal secret" });
-  }
+  const configured = process.env.INTERNAL_SCRAPE_SECRET || "";
+  const provided = req.header("X-Internal-Secret") || "";
+  const configuredBuf = Buffer.from(configured, "utf8");
+  const providedBuf = Buffer.from(provided, "utf8");
+  const valid =
+    configured.length > 0 &&
+    configuredBuf.length === providedBuf.length &&
+    crypto.timingSafeEqual(configuredBuf, providedBuf);
+  if (!valid) return res.status(401).json({ error: "Invalid internal secret" });
   next();
 }
 

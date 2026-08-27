@@ -7,7 +7,7 @@ import ContextMenu from "./ContextMenu.jsx";
 import SectionTable from "./SectionTable.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconRefresh } from "./Icons.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
@@ -54,6 +54,7 @@ export default function App() {
   const [sheetImportError, setSheetImportError] = useState(null);
   const [sheetImportJustSucceeded, setSheetImportJustSucceeded] = useState(false);
   const sheetFileInputRef = useRef(null);
+  const [sheetExporting, setSheetExporting] = useState(false);
   const [refreshingFilter, setRefreshingFilter] = useState(null); // null | "amazon" | "mouser" | "other" | "all"
   const [taxRateEditing, setTaxRateEditing] = useState(false);
   const [taxRateDraft, setTaxRateDraft] = useState("");
@@ -681,6 +682,41 @@ export default function App() {
     }
   }
 
+  // Downloads the current BOM as a .xlsx via GET /:bomId/export-sheet.
+  // Same fixed A/B/C/D column layout importSheet() reads, so a round trip
+  // (export -> edit in Excel/Sheets -> re-import) reproduces the BOM.
+  async function exportSheet() {
+    if (!bom) return;
+    setSheetExporting(true);
+    setSheetImportError(null);
+    try {
+      const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/export-sheet`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Export failed");
+      }
+      const blob = await res.blob();
+      // Prefer the server's Content-Disposition filename so it matches the
+      // BOM title exactly (already sanitized server-side); fall back to a
+      // client-side slug if the header is missing for any reason.
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : `${(bom.title || "BOM").replace(/[^a-z0-9 _-]/gi, "").trim() || "BOM"}.xlsx`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setSheetImportError(err.message || "Export failed");
+    } finally {
+      setSheetExporting(false);
+    }
+  }
+
   // Load the BOM list once we know who's logged in and haven't opened a BOM.
   useEffect(() => {
     if (token && user && !bom && bomList === null) loadBomList();
@@ -1136,6 +1172,19 @@ export default function App() {
                 }}
               >
                 <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import Sheet"}
+              </button>
+              <button
+                onClick={exportSheet}
+                disabled={sheetExporting}
+                title="Download as .xlsx (opens fine in Excel, Google Sheets, Numbers, etc.)"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600,
+                  cursor: sheetExporting ? "default" : "pointer", opacity: sheetExporting ? 0.6 : 1,
+                }}
+              >
+                <IconDownload size={13} /> {sheetExporting ? "Exporting…" : "Export Sheet"}
               </button>
               <button
                 onClick={addTable}

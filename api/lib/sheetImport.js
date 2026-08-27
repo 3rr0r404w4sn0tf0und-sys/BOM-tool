@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { validateProductUrl } from "./urlValidation.js";
 
 // SheetJS's cell.l.Target returns the hyperlink target exactly as it
 // appears in the XLSX file's internal relationships XML -- which means
@@ -68,7 +69,17 @@ export function parseSheet(buffer) {
       sections.push(current);
     }
 
-    const url = aCell && aCell.l && aCell.l.Target ? decodeXmlEntities(aCell.l.Target) : null;
+    let url = aCell && aCell.l && aCell.l.Target ? decodeXmlEntities(aCell.l.Target) : null;
+    if (url) {
+      // Validate (and normalize) the hyperlink here, at parse time, rather
+      // than leaving it to whenever triggerScrape() happens to run later --
+      // that path only *rejects*, it doesn't stop the row from already
+      // having been inserted with a raw javascript:/file:/private-network
+      // URL sitting in it. A bad link degrades to "no link" for this row
+      // instead of failing the whole import.
+      try { url = validateProductUrl(url); }
+      catch { url = null; }
+    }
     const name = bText || aText || url || "Untitled item";
     const qtyNum = hasQty ? Number(qtyRaw) : 1;
 
@@ -80,4 +91,49 @@ export function parseSheet(buffer) {
   }
 
   return { sections: sections.filter((s) => s.items.length > 0) };
+}
+
+// Builds a .xlsx buffer in the same fixed column layout parseSheet() reads:
+//   A: item name, as a hyperlink to its product URL when it has one
+//   B: left blank (name-override column on import; nothing to override here)
+//   C: quantity
+//   D: left blank (ignored on import)
+// A section becomes a header row (text in A, nothing in C) followed by its
+// item rows, so a BOM exported here can be re-imported unchanged via
+// POST /:bomId/import-sheet.
+export function buildSheetFromBom(bom) {
+  const rows = [];
+  const merges = [];
+  for (const section of bom.sections || []) {
+    merges.push({ s: { r: rows.length, c: 0 }, e: { r: rows.length, c: 3 } });
+    rows.push([section.title || "Untitled Section", "", "", ""]);
+    for (const item of section.items || []) {
+      rows.push([item.name || "", "", Number(item.qty) || 1, ""]);
+    }
+    rows.push(["", "", "", ""]); // blank separator row between sections
+  }
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows.length ? rows : [["", "", "", ""]]);
+  worksheet["!cols"] = [{ wch: 48 }, { wch: 24 }, { wch: 10 }, { wch: 10 }];
+  if (merges.length) worksheet["!merges"] = merges;
+
+  // Attach hyperlinks to column A for item rows that have a URL, mirroring
+  // the cell.l.Target shape parseSheet() reads back on import.
+  let r = 0;
+  for (const section of bom.sections || []) {
+    r += 1; // header row, no link
+    for (const item of section.items || []) {
+      if (item.url) {
+        const cellRef = XLSX.utils.encode_cell({ r, c: 0 });
+        const cell = worksheet[cellRef];
+        if (cell) cell.l = { Target: item.url };
+      }
+      r += 1;
+    }
+    r += 1; // separator row
+  }
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "BOM");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
