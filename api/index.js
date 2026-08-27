@@ -17,10 +17,10 @@ app.set("trust proxy", 1);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'none"],
-      frameAncestors: ["'none"],
-      baseUri: ["'none"],
-      formAction: ["'self"],
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'self'"],
     },
   },
   referrerPolicy: { policy: "no-referrer" },
