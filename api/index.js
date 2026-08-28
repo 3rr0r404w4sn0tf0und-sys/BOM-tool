@@ -29,6 +29,16 @@ app.use(helmet({
 const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
   .split(",").map((origin) => origin.trim()).filter(Boolean);
 
+// The public, api_key-authenticated routes (/api/public/*) are meant to
+// be called from anywhere -- Odoo, Google Sheets, a customer's own
+// scripts, etc. -- so they get an open CORS policy with no credentials.
+// The security boundary there is the api_key itself, not the browser's
+// origin, so restricting Access-Control-Allow-Origin buys nothing except
+// breaking legitimate third-party integrations. Every other route stays
+// on the strict FRONTEND_URL allowlist since those rely on the session
+// cookie, which does need the origin lock.
+app.use("/api/public", cors({ origin: true, credentials: false }));
+
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
