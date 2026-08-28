@@ -29,6 +29,15 @@ app.use(helmet({
 const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
   .split(",").map((origin) => origin.trim()).filter(Boolean);
 
+const openCors = cors({ origin: true, credentials: false });
+const strictCors = cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS origin not allowed"));
+  },
+  credentials: true,
+});
+
 // The public, api_key-authenticated routes (/api/public/*) are meant to
 // be called from anywhere -- Odoo, Google Sheets, a customer's own
 // scripts, etc. -- so they get an open CORS policy with no credentials.
@@ -37,15 +46,17 @@ const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
 // breaking legitimate third-party integrations. Every other route stays
 // on the strict FRONTEND_URL allowlist since those rely on the session
 // cookie, which does need the origin lock.
-app.use("/api/public", cors({ origin: true, credentials: false }));
-
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS origin not allowed"));
-  },
-  credentials: true,
-}));
+//
+// NOTE: app.use() runs every middleware whose path matches, not just the
+// first one -- app.use("/api/public", openCors) followed by a separate
+// app.use(strictCors) would run BOTH for /api/public requests (the
+// second has no path filter, so it matches everything), and the strict
+// one would still reject the origin. Branching inside a single
+// middleware, so exactly one cors policy ever runs per request.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/public")) return openCors(req, res, next);
+  return strictCors(req, res, next);
+});
 app.use(cookieParser());
 app.use(requireAllowedOrigin);
 app.use(auditMutations);
