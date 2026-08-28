@@ -15,29 +15,6 @@ function sheetsScript(linksUrl) {
 }`;
 }
 
-// Odoo server action -- pulls the formatted feed and logs one note per row
-// against a record. Meant to be copy/pasted straight into a Scheduled
-// Action's "Execute Python Code" box.
-function odooScript(cleanUrl) {
-  return `import requests
-
-resp = requests.get("${cleanUrl}", timeout=15)
-resp.raise_for_status()
-data = resp.json()
-
-Note = env["mail.message"].sudo()
-for section in data["sections"]:
-    for row in section["rows"]:
-        Note.create({
-            "model": "res.partner",
-            "res_id": record.id,
-            "body": "%s x%s - %s" % (row["item"], row["qty"], row["price"]),
-            "message_type": "comment",
-        })
-# Swap the mail.message block above for whatever Odoo model
-# (purchase.order.line, product.template, ...) this BOM should sync into.`;
-}
-
 function CopyRow({ label, value, theme }) {
   const [copied, setCopied] = useState(false);
 
@@ -261,13 +238,6 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
         <div style={{ marginBottom: 14 }}>
           <CopyCodeButton label="Copy Apps Script code" getCode={() => sheetsScript(linksUrl)} theme={theme} />
         </div>
-
-        <h4 style={{ fontSize: 13, margin: "0 0 6px" }}>Odoo</h4>
-        <p style={{ fontSize: 12.5, color: theme.subtleText, margin: "0 0 8px", lineHeight: 1.5 }}>
-          Settings → Technical → Automation → Scheduled Actions → New. Set the model, choose "Execute Python Code,"
-          and paste the copied code into the code box — it logs one note per BOM row on the record.
-        </p>
-        <CopyCodeButton label="Copy Odoo scheduled-action code" getCode={() => odooScript(cleanUrl)} theme={theme} />
       </div>
     </div>
   );
