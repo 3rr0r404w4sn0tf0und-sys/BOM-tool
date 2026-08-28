@@ -28,6 +28,7 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from apify_scrape import try_apify_scrape_batch
+from secret_crypto import decrypt_secret
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
@@ -39,9 +40,11 @@ def main():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute(
-        f"""SELECT id, url FROM items
-            WHERE url IS NOT NULL AND url != '' AND url ILIKE '%amazon.%'
-              AND (last_checked IS NULL OR last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
+        f"""SELECT items.id, items.url, boms.user_id FROM items
+            JOIN sections ON items.section_id = sections.id
+            JOIN boms ON sections.bom_id = boms.id
+            WHERE items.url IS NOT NULL AND items.url != '' AND items.url ILIKE '%amazon.%'
+              AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
     print(f"Weekly Amazon refresh: {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
@@ -53,10 +56,20 @@ def main():
         return
 
     cur.execute("UPDATE items SET status = 'pending', stale_price = false, scrape_job_id = %s WHERE id = ANY(%s::uuid[])", (job_id, [r["id"] for r in rows]))
-    urls = [row["url"] for row in rows]
     url_to_id = {row["url"]: row["id"] for row in rows}
 
-    results = try_apify_scrape_batch(urls)
+    # Group by BOM owner so each owner's Apify credits/token only pay for
+    # their own Amazon items -- there is no shared APIFY_TOKEN anymore.
+    by_owner = {}
+    for row in rows:
+        by_owner.setdefault(row["user_id"], []).append(row["url"])
+
+    results = {}
+    for user_id, urls in by_owner.items():
+        cur.execute("SELECT apify_token_encrypted FROM users WHERE id = %s", (user_id,))
+        token_row = cur.fetchone()
+        token = decrypt_secret(token_row["apify_token_encrypted"]) if token_row else None
+        results.update(try_apify_scrape_batch(urls, apify_token=token))
 
     refreshed = 0
     stale = 0

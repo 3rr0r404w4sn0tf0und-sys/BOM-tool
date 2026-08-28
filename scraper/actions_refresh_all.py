@@ -29,6 +29,7 @@ import psycopg2.extras
 import uuid
 from scrape_logic import get_price
 from apify_generic_scrape import try_apify_generic_scrape_batch
+from secret_crypto import decrypt_secret
 
 # Keep in sync with actions_scrape_one.py -- domains confirmed to block a
 # plain HTTP fetch, routed through Apify's generic Puppeteer Actor
@@ -46,12 +47,17 @@ def main():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    # Join through to the BOM owner so Apify-routed items (Arrow) can be
+    # billed against each owner's own token instead of one shared one --
+    # there is no site-wide APIFY_TOKEN secret anymore.
     cur.execute(
-        f"""SELECT id, url FROM items
-           WHERE url IS NOT NULL AND url != ''
-             AND url NOT ILIKE '%amazon.%'
-             AND url NOT ILIKE '%mouser.%'
-             AND (last_checked IS NULL OR last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
+        f"""SELECT items.id, items.url, boms.user_id FROM items
+           JOIN sections ON items.section_id = sections.id
+           JOIN boms ON sections.bom_id = boms.id
+           WHERE items.url IS NOT NULL AND items.url != ''
+             AND items.url NOT ILIKE '%amazon.%'
+             AND items.url NOT ILIKE '%mouser.%'
+             AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
     if rows:
@@ -70,8 +76,19 @@ def main():
     results = {}
 
     if apify_rows:
-        apify_urls = [r["url"] for r in apify_rows]
-        results.update(try_apify_generic_scrape_batch(apify_urls))
+        # Group by BOM owner so each owner's Apify credits pay for their
+        # own items only, using their own saved token. Owners with no
+        # token saved simply get "Apify not configured" for their Arrow
+        # items, same as any other missing-token case.
+        by_owner = {}
+        for r in apify_rows:
+            by_owner.setdefault(r["user_id"], []).append(r["url"])
+
+        for user_id, urls in by_owner.items():
+            cur.execute("SELECT apify_token_encrypted FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            token = decrypt_secret(row["apify_token_encrypted"]) if row else None
+            results.update(try_apify_generic_scrape_batch(urls, apify_token=token))
 
     refreshed = 0
     failed = 0

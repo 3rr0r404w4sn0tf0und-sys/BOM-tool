@@ -24,7 +24,7 @@ jobs:
           URL: ${{ github.event.client_payload.url }}
           CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
           INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_TOKEN: ${{ github.event.client_payload.apify_token }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
         run: python scraper/actions_scrape_one.py

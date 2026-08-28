@@ -132,29 +132,33 @@ def _match_input_url(returned_url: str, input_urls: list, used: set):
                     return u
     return None
 
-def try_apify_mouser_scrape(url: str) -> dict:
-    results = try_apify_mouser_scrape_batch([url])
+def try_apify_mouser_scrape(url: str, apify_token: str = None) -> dict:
+    results = try_apify_mouser_scrape_batch([url], apify_token=apify_token)
     return results.get(url, {"found": False, "error": "Apify Mouser scraper returned no results"})
 
 
-def try_apify_mouser_scrape_batch(urls: list) -> dict:
+def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
     """Same lookup as try_apify_mouser_scrape, but sends every url to the
     Actor in ONE run (it already accepts a productUrls list) instead of
     one Actor run per url -- cuts out most of the per-item startup
     overhead on a big batch refresh.
+
+    apify_token, if passed, overrides the APIFY_TOKEN env var -- see
+    apify_scrape.try_apify_scrape_batch for why.
 
     Returns {url: {found, price, source}}, one entry per input url.
     """
     if not urls:
         return {}
 
-    if not APIFY_TOKEN:
+    token = apify_token or APIFY_TOKEN
+    if not token:
         error = {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
         return {u: error for u in urls}
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_MOUSER_ACTOR_ID.replace('/', '~')}"
-        f"/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+        f"/run-sync-get-dataset-items?token={token}"
     )
 
     run_input = {

@@ -111,18 +111,21 @@ async function pageFunction(context) {
 """
 
 
-def try_apify_generic_scrape(url: str) -> dict:
-    results = try_apify_generic_scrape_batch([url])
+def try_apify_generic_scrape(url: str, apify_token: str = None) -> dict:
+    results = try_apify_generic_scrape_batch([url], apify_token=apify_token)
     return results.get(url, {"found": False, "error": "Apify returned no results"})
 
 
-def try_apify_generic_scrape_batch(urls: list) -> dict:
+def try_apify_generic_scrape_batch(urls: list, apify_token: str = None) -> dict:
     """Same page-scraping logic as try_apify_generic_scrape, but crawls
     every URL in ONE Actor run instead of one run per URL. This is the
     thing that made batch refreshes slow -- an Actor run has real
     startup/proxy-negotiation overhead (several seconds) before it even
     loads the first page, and firing that once per item instead of once
     per whole batch was most of the wall-clock time on a big BOM.
+
+    apify_token, if passed, overrides the APIFY_TOKEN env var -- see
+    apify_scrape.try_apify_scrape_batch for why.
 
     Returns {url: {found, price, source}} -- one entry per input url.
     Any url missing from Apify's response (crawl failure on just that
@@ -132,13 +135,14 @@ def try_apify_generic_scrape_batch(urls: list) -> dict:
     if not urls:
         return {}
 
-    if not APIFY_TOKEN:
+    token = apify_token or APIFY_TOKEN
+    if not token:
         error = {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
         return {u: error for u in urls}
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_PUPPETEER_ACTOR_ID.replace('/', '~')}"
-        f"/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+        f"/run-sync-get-dataset-items?token={token}"
     )
 
     run_input = {

@@ -1,14 +1,15 @@
-name: Nightly price refresh
+name: Mouser price refresh (biweekly)
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 12:00 AM UTC daily -- adjust for your timezone if needed
-  workflow_dispatch: {}    # lets you trigger it manually from the Actions tab too
+    - cron: "0 6 1,15 * *"   # 6 AM UTC on the 1st and 15th -- offset from the Amazon job (midnight) so they don't compete for the same runner window
+  workflow_dispatch: {}
 
 jobs:
-  refresh:
+  refresh-mouser:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # many items to loop through; still shouldn't hang forever
+    timeout-minutes: 60  # this can run long with many items + delays
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,9 +21,10 @@ jobs:
         run: |
           pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
 
-      - name: Refresh all item prices
+      - name: Refresh Mouser item prices
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_ENCRYPTION_KEY: ${{ secrets.SECRET_ENCRYPTION_KEY }}
+          APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
-        run: python scraper/actions_refresh_all.py
+        run: python scraper/actions_refresh_mouser_weekly.py

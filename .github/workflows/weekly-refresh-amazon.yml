@@ -23,6 +23,6 @@ jobs:
       - name: Refresh Amazon item prices
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          SECRET_ENCRYPTION_KEY: ${{ secrets.SECRET_ENCRYPTION_KEY }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
         run: python scraper/actions_refresh_amazon_weekly.py

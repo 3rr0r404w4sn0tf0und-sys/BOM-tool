@@ -32,6 +32,7 @@ import psycopg2.extras
 import uuid
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
 from apify_generic_scrape import try_apify_generic_scrape_batch
+from secret_crypto import decrypt_secret
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
@@ -43,9 +44,11 @@ def main():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute(
-        f"""SELECT id, url FROM items
-            WHERE url IS NOT NULL AND url != '' AND url ILIKE '%mouser.%'
-              AND (last_checked IS NULL OR last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
+        f"""SELECT items.id, items.url, boms.user_id FROM items
+            JOIN sections ON items.section_id = sections.id
+            JOIN boms ON sections.bom_id = boms.id
+            WHERE items.url IS NOT NULL AND items.url != '' AND items.url ILIKE '%mouser.%'
+              AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
     print(f"Weekly Mouser refresh: {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
@@ -57,17 +60,36 @@ def main():
         return
 
     cur.execute("UPDATE items SET status = 'pending', stale_price = false, scrape_job_id = %s WHERE id = ANY(%s::uuid[])", (job_id, [r["id"] for r in rows]))
-    urls = [row["url"] for row in rows]
     url_to_id = {row["url"]: row["id"] for row in rows}
 
-    results = try_apify_mouser_scrape_batch(urls)
+    # Group by BOM owner so each owner's Apify credits/token only pay for
+    # their own Mouser items -- there is no shared APIFY_TOKEN anymore.
+    by_owner = {}
+    for row in rows:
+        by_owner.setdefault(row["user_id"], []).append(row["url"])
 
-    leftover_urls = [u for u in urls if not results.get(u, {}).get("found")]
-    if leftover_urls:
-        print(f"Dedicated Mouser Actor found {len(urls) - len(leftover_urls)}/{len(urls)}; "
-              f"trying generic Apify scrape for the remaining {len(leftover_urls)}")
-        generic_results = try_apify_generic_scrape_batch(leftover_urls)
-        results.update(generic_results)
+    owner_tokens = {}
+    results = {}
+    for user_id, urls in by_owner.items():
+        cur.execute("SELECT apify_token_encrypted FROM users WHERE id = %s", (user_id,))
+        token_row = cur.fetchone()
+        token = decrypt_secret(token_row["apify_token_encrypted"]) if token_row else None
+        owner_tokens[user_id] = token
+        results.update(try_apify_mouser_scrape_batch(urls, apify_token=token))
+
+    leftover_by_owner = {}
+    for user_id, urls in by_owner.items():
+        leftover = [u for u in urls if not results.get(u, {}).get("found")]
+        if leftover:
+            leftover_by_owner[user_id] = leftover
+
+    if leftover_by_owner:
+        total_leftover = sum(len(v) for v in leftover_by_owner.values())
+        total_urls = sum(len(v) for v in by_owner.values())
+        print(f"Dedicated Mouser Actor found {total_urls - total_leftover}/{total_urls}; "
+              f"trying generic Apify scrape for the remaining {total_leftover}")
+        for user_id, leftover in leftover_by_owner.items():
+            results.update(try_apify_generic_scrape_batch(leftover, apify_token=owner_tokens.get(user_id)))
 
     refreshed = 0
     stale = 0

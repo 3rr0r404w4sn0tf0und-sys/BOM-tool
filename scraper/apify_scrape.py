@@ -106,26 +106,32 @@ def _match_input_url(returned_url: str, input_urls: list, used: set):
                     return u
     return None
 
-def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None) -> dict:
-    results = try_apify_scrape_batch([url], zip_code=zip_code, country_code=country_code)
+def try_apify_scrape(url: str, zip_code: str = None, country_code: str = None, apify_token: str = None) -> dict:
+    results = try_apify_scrape_batch([url], zip_code=zip_code, country_code=country_code, apify_token=apify_token)
     return results.get(url, {"found": False, "error": "Apify returned no results (product may be delisted)"})
 
 
-def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str = None) -> dict:
+def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str = None, apify_token: str = None) -> dict:
     """Same lookup as try_apify_scrape, but sends every url to the Actor
     in ONE run (categoryOrProductUrls already accepts a list) instead of
     one Actor run per url -- this is the main thing slowing batch/weekly
     Amazon refreshes down, since each Actor run has real startup and
     proxy-negotiation overhead before it scrapes a single page.
 
+    apify_token, if passed, overrides the APIFY_TOKEN env var -- lets a
+    caller that's looping over multiple BOM owners (e.g. the nightly/
+    weekly cron jobs) use each owner's own token per call instead of a
+    single shared one.
+
     Returns {url: {found, price, source}}, one entry per input url.
     """
     if not urls:
         return {}
 
-    if not APIFY_TOKEN or not APIFY_ACTOR_ID:
+    token = apify_token or APIFY_TOKEN
+    if not token or not APIFY_ACTOR_ID:
         missing = ", ".join(
-            name for name, val in (("APIFY_TOKEN", APIFY_TOKEN), ("APIFY_AMAZON_ACTOR_ID", APIFY_ACTOR_ID))
+            name for name, val in (("APIFY_TOKEN", token), ("APIFY_AMAZON_ACTOR_ID", APIFY_ACTOR_ID))
             if not val
         )
         error = {"found": False, "error": f"Apify not configured (missing env var(s): {missing})"}
@@ -133,7 +139,7 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_ACTOR_ID}"
-        f"/run-sync-get-dataset-items?token={APIFY_TOKEN}"
+        f"/run-sync-get-dataset-items?token={token}"
     )
 
     run_input = {

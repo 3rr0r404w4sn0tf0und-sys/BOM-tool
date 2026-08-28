@@ -23,7 +23,7 @@ jobs:
           JOB_ID: ${{ github.event.client_payload.job_id }}
           FILTER: ${{ github.event.client_payload.filter }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          APIFY_TOKEN: ${{ github.event.client_payload.apify_token }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
           APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
