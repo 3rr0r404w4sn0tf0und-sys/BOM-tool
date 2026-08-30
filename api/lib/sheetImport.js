@@ -140,3 +140,84 @@ export function buildSheetFromBom(bom) {
   XLSX.utils.book_append_sheet(workbook, worksheet, "BOM");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
+
+// --- Sheet (generic table) import/export ---
+// Same section-header / blank-separator-row grammar as parseSheet(), but
+// with no fixed link/name/qty meaning: column A..G (up to columnCount)
+// are just cell text, and the LAST column is always the checkbox
+// ("TRUE"/"FALSE", "1"/"0", "yes"/"no", or blank = checked by default).
+export function parseGenericSheet(buffer, columnCount = 3) {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellHTML: false });
+  const sheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  if (!worksheet || !worksheet["!ref"]) return { sections: [] };
+
+  const range = XLSX.utils.decode_range(worksheet["!ref"]);
+  const numCols = Math.max(1, Math.min(7, columnCount));
+  const sections = [];
+  let current = null;
+
+  function readRowCells(r) {
+    const cells = [];
+    for (let c = 0; c < numCols; c++) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r, c })];
+      cells.push(cell && cell.v != null ? String(cell.v).trim() : "");
+    }
+    const checkboxCell = worksheet[XLSX.utils.encode_cell({ r, c: numCols })];
+    const checkboxRaw = checkboxCell && checkboxCell.v != null ? String(checkboxCell.v).trim().toLowerCase() : "";
+    const checked = !["false", "0", "no", "n"].includes(checkboxRaw);
+    return { cells, checkboxRaw, checked };
+  }
+
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const { cells, checkboxRaw, checked } = readRowCells(r);
+    const rowIsBlank = cells.every((c) => !c) && !checkboxRaw;
+    if (rowIsBlank) continue;
+
+    // A row with content only in the first cell, and every other cell
+    // (including the checkbox column) blank, is a section header --
+    // mirrors parseSheet()'s "text in A, nothing in C" header rule.
+    const isHeader = cells[0] && cells.slice(1).every((c) => !c) && !checkboxRaw;
+    if (isHeader) {
+      current = { title: cells[0], items: [] };
+      sections.push(current);
+      continue;
+    }
+
+    if (!current) {
+      current = { title: "Imported Items", items: [] };
+      sections.push(current);
+    }
+    current.items.push({ sheet_data: cells, checked });
+  }
+
+  return { sections: sections.filter((s) => s.items.length > 0) };
+}
+
+export function buildGenericSheet(bom) {
+  const numCols = Math.max(1, Math.min(7, bom.column_count || 3));
+  const headerLabels = Array.from({ length: numCols }, (_, i) => bom.column_labels?.[i] || `Thing ${i + 1}`);
+  const rows = [];
+  const merges = [];
+  for (const section of bom.sections || []) {
+    merges.push({ s: { r: rows.length, c: 0 }, e: { r: rows.length, c: numCols } });
+    rows.push([section.title || "Untitled Section", ...Array(numCols).fill("")]);
+    for (const item of section.items || []) {
+      const cells = Array.isArray(item.sheet_data) ? item.sheet_data : [];
+      const paddedCells = Array.from({ length: numCols }, (_, i) => cells[i] ?? "");
+      rows.push([...paddedCells, item.checked === false ? "FALSE" : "TRUE"]);
+    }
+    rows.push(Array(numCols + 1).fill(""));
+  }
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows.length ? [headerLabels.concat("Done"), ...rows] : [headerLabels.concat("Done")]);
+  worksheet["!cols"] = Array(numCols + 1).fill({ wch: 20 });
+  if (merges.length) {
+    // shift merges down 1 row to account for the header label row we just added
+    worksheet["!merges"] = merges.map((m) => ({ s: { ...m.s, r: m.s.r + 1 }, e: { ...m.e, r: m.e.r + 1 } }));
+  }
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet");
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+}

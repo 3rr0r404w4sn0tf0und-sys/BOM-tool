@@ -6,9 +6,9 @@ import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireCsrf } from "../middleware/auth.js";
 import { calculateTotals } from "../db/totals.js";
-import { parseSheet, buildSheetFromBom } from "../lib/sheetImport.js";
+import { parseSheet, buildSheetFromBom, parseGenericSheet, buildGenericSheet } from "../lib/sheetImport.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
-import { optionalString, optionalNumber, optionalBoolean } from "../lib/validation.js";
+import { optionalString, optionalNumber, optionalBoolean, optionalEnum, optionalSheetData } from "../lib/validation.js";
 import { validateProductUrl } from "../lib/urlValidation.js";
 import { triggerScrape, triggerBatchScrape } from "../lib/scrapeDispatcher.js";
 import rateLimit from "express-rate-limit";
@@ -79,10 +79,17 @@ function validateBody(fn, res) {
 bomsRouter.post("/", asyncHandler(async (req, res) => {
   const title = validateBody(() => optionalString(req.body?.title, "title", 200), res);
   if (title === null && req.body?.title !== undefined && req.body?.title !== null) return;
+  const doc_type = validateBody(() => optionalEnum(req.body?.doc_type, "doc_type", ["bom", "sheet"]), res);
+  if (res.locals.validationFailed) return;
+  const column_count = validateBody(() => optionalNumber(req.body?.column_count, "column_count", { min: 1, max: 7 }), res);
+  if (res.locals.validationFailed) return;
   const apiKey = crypto.randomBytes(24).toString("hex");
+  const resolvedType = doc_type || "bom";
+  const resolvedTitle = title || (resolvedType === "sheet" ? "Untitled Sheet" : "Untitled BOM");
   const result = await pool.query(
-    `INSERT INTO boms (user_id, title, public_api_key) VALUES ($1, $2, $3) RETURNING *`,
-    [req.userId, title || "Untitled BOM", apiKey]
+    `INSERT INTO boms (user_id, title, public_api_key, doc_type, column_count)
+     VALUES ($1, $2, $3, $4, COALESCE($5, 3)) RETURNING *`,
+    [req.userId, resolvedTitle, apiKey, resolvedType, column_count]
   );
   res.json(result.rows[0]);
 }));
@@ -146,12 +153,40 @@ bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
   if (title === null && req.body?.title !== undefined && req.body?.title !== null) return;
   const tax_rate = validateBody(() => optionalNumber(req.body?.tax_rate, "tax_rate", { min: 0, max: 1 }), res);
   if (tax_rate === null && req.body?.tax_rate !== undefined && req.body?.tax_rate !== null && req.body?.tax_rate !== "") return;
+  const doc_type = validateBody(() => optionalEnum(req.body?.doc_type, "doc_type", ["bom", "sheet"]), res);
+  if (res.locals.validationFailed) return;
   const result = await pool.query(
     `UPDATE boms SET title = COALESCE($1, title), tax_rate = COALESCE($2, tax_rate),
-     updated_at = now() WHERE id = $3 AND user_id = $4 RETURNING *`,
-    [title, tax_rate, req.params.id, req.userId]
+     doc_type = COALESCE($3, doc_type), updated_at = now() WHERE id = $4 AND user_id = $5 RETURNING *`,
+    [title, tax_rate, doc_type, req.params.id, req.userId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  res.json(result.rows[0]);
+}));
+
+// Change a sheet's column count (1-7). Existing rows' sheet_data arrays
+// are left as-is -- the frontend pads/truncates when rendering -- so
+// shrinking then growing the column count never silently drops data that
+// happens to still be sitting in an item's JSON past the current count.
+bomsRouter.patch("/:id/columns", asyncHandler(async (req, res) => {
+  const column_count = validateBody(() => optionalNumber(req.body?.column_count, "column_count", { min: 1, max: 7 }), res);
+  if (res.locals.validationFailed) return;
+  if (column_count === null) return res.status(400).json({ error: "column_count is required" });
+  const column_labels = validateBody(() => {
+    if (req.body?.column_labels === undefined) return undefined;
+    if (req.body.column_labels === null) return null;
+    if (!Array.isArray(req.body.column_labels)) throw new Error("column_labels must be an array");
+    return req.body.column_labels.map((l) => optionalString(l, "column_labels[]", 60) || "");
+  }, res);
+  if (res.locals.validationFailed) return;
+  const result = await pool.query(
+    `UPDATE boms SET column_count = $1,
+       column_labels = CASE WHEN $2::text[] IS NOT NULL THEN $2 ELSE column_labels END,
+       updated_at = now()
+     WHERE id = $3 AND user_id = $4 AND doc_type = 'sheet' RETURNING *`,
+    [column_count, column_labels === undefined ? null : column_labels, req.params.id, req.userId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Sheet not found" });
   res.json(result.rows[0]);
 }));
 
@@ -295,12 +330,17 @@ bomsRouter.post("/sections/:sectionId/restore", asyncHandler(async (req, res) =>
 // are left untouched here -- items with a URL get a scrape kicked off the
 // same way manually-added items do, so price shows up shortly after.
 bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler(async (req, res) => {
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
+  const owns = await pool.query("SELECT id, doc_type, column_count FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
   if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  const isSheet = owns.rows[0].doc_type === "sheet";
 
   let parsed;
-  try { parsed = parseSheet(req.file.buffer); }
+  try {
+    parsed = isSheet
+      ? parseGenericSheet(req.file.buffer, owns.rows[0].column_count)
+      : parseSheet(req.file.buffer);
+  }
   catch (e) {
     console.error("Failed to parse uploaded sheet:", e);
     return res.status(400).json({ error: "Could not parse file. Supported: .xlsx, .xls, .csv" });
@@ -326,19 +366,33 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
       const newSection = sectionResult.rows[0];
       let createdItems = [];
       if (section.items.length) {
-        const names = section.items.map((i) => i.name);
-        const urls = section.items.map((i) => i.url ?? null);
-        const qtys = section.items.map((i) => i.qty);
-        const sortOrders = section.items.map((_, i) => i);
-        const itemsResult = await client.query(
-          `INSERT INTO items (section_id, name, url, qty, sort_order, status)
-           SELECT $1, data.name, data.url, data.qty, data.sort_order, CASE WHEN data.url IS NULL OR data.url = '' THEN 'price_not_found' ELSE 'pending' END
-           FROM unnest($2::text[], $3::text[], $4::numeric[], $5::int[])
-             AS data(name, url, qty, sort_order) RETURNING *`,
-          [newSection.id, names, urls, qtys, sortOrders]
-        );
-        createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
-        for (const item of createdItems) if (item.url) scrapeTargets.push({ id: item.id, url: item.url });
+        if (isSheet) {
+          const sortOrders = section.items.map((_, i) => i);
+          const sheetDatas = section.items.map((i) => JSON.stringify(i.sheet_data || []));
+          const checkeds = section.items.map((i) => i.checked !== false);
+          const itemsResult = await client.query(
+            `INSERT INTO items (section_id, name, sheet_data, checked, sort_order, status)
+             SELECT $1, '', data.sheet_data::jsonb, data.checked, data.sort_order, 'price_not_found'
+             FROM unnest($2::text[], $3::boolean[], $4::int[])
+               AS data(sheet_data, checked, sort_order) RETURNING *`,
+            [newSection.id, sheetDatas, checkeds, sortOrders]
+          );
+          createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
+        } else {
+          const names = section.items.map((i) => i.name);
+          const urls = section.items.map((i) => i.url ?? null);
+          const qtys = section.items.map((i) => i.qty);
+          const sortOrders = section.items.map((_, i) => i);
+          const itemsResult = await client.query(
+            `INSERT INTO items (section_id, name, url, qty, sort_order, status)
+             SELECT $1, data.name, data.url, data.qty, data.sort_order, CASE WHEN data.url IS NULL OR data.url = '' THEN 'price_not_found' ELSE 'pending' END
+             FROM unnest($2::text[], $3::text[], $4::numeric[], $5::int[])
+               AS data(name, url, qty, sort_order) RETURNING *`,
+            [newSection.id, names, urls, qtys, sortOrders]
+          );
+          createdItems = itemsResult.rows.sort((a, b) => a.sort_order - b.sort_order);
+          for (const item of createdItems) if (item.url) scrapeTargets.push({ id: item.id, url: item.url });
+        }
       }
       createdSections.push({ ...newSection, items: createdItems });
     }
@@ -394,7 +448,9 @@ bomsRouter.get("/:bomId/export-sheet", asyncHandler(async (req, res) => {
     items: itemsBySection.get(s.id) || [],
   }));
 
-  const buffer = buildSheetFromBom({ ...bom, sections: sectionsWithItems });
+  const buffer = bom.doc_type === "sheet"
+    ? buildGenericSheet({ ...bom, sections: sectionsWithItems })
+    : buildSheetFromBom({ ...bom, sections: sectionsWithItems });
 
   // Keep the download filename readable but safe -- strip anything that
   // isn't a plain filename character so a crafted BOM title can't inject
@@ -429,6 +485,8 @@ bomsRouter.post("/sections/:sectionId/items", asyncHandler(async (req, res) => {
   const italic = validateBody(() => optionalBoolean(req.body?.italic, "italic"), res);
   const font_size = validateBody(() => optionalNumber(req.body?.font_size, "font_size", { min: 8, max: 96 }), res);
   const sort_order = validateBody(() => optionalNumber(req.body?.sort_order, "sort_order", { min: 0, max: 100000000 }), res);
+  const sheet_data = validateBody(() => optionalSheetData(req.body?.sheet_data, "sheet_data"), res);
+  const checked = validateBody(() => optionalBoolean(req.body?.checked, "checked"), res);
   if (res.locals.validationFailed) return;
   if (!await getOwnedSection(req.params.sectionId, req.userId)) {
     return res.status(404).json({ error: "Section not found" });
@@ -447,11 +505,11 @@ bomsRouter.post("/sections/:sectionId/items", asyncHandler(async (req, res) => {
   }
 
   const result = await pool.query(
-    `INSERT INTO items (section_id, name, url, qty, bold, italic, font_size, sort_order, status)
+    `INSERT INTO items (section_id, name, url, qty, bold, italic, font_size, sort_order, status, sheet_data, checked)
      VALUES ($1, $2, $3, COALESCE($4, 1), COALESCE($5,false), COALESCE($6,false),
-             COALESCE($7,19), $8, 'pending')
+             COALESCE($7,19), $8, 'pending', $9, COALESCE($10, true))
      RETURNING *`,
-    [req.params.sectionId, name, url, qty, bold, italic, font_size, order]
+    [req.params.sectionId, name, url, qty, bold, italic, font_size, order, sheet_data ? JSON.stringify(sheet_data) : null, checked]
   );
   const item = result.rows[0];
 
@@ -480,6 +538,8 @@ bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
   const italic = validateBody(() => optionalBoolean(req.body?.italic, "italic"), res);
   const font_size = validateBody(() => optionalNumber(req.body?.font_size, "font_size", { min: 8, max: 96 }), res);
   const sort_order = validateBody(() => optionalNumber(req.body?.sort_order, "sort_order", { min: 0, max: 100000000 }), res);
+  const sheet_data = validateBody(() => optionalSheetData(req.body?.sheet_data, "sheet_data"), res);
+  const checked = validateBody(() => optionalBoolean(req.body?.checked, "checked"), res);
   if (res.locals.validationFailed) return;
   const before = await pool.query("SELECT url FROM items WHERE id = $1", [req.params.itemId]);
   const previousUrl = before.rows[0]?.url || null;
@@ -488,10 +548,11 @@ bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
        name = COALESCE($1, name), url = COALESCE($2, url), qty = COALESCE($3, qty),
        bold = COALESCE($4, bold), italic = COALESCE($5, italic),
        font_size = COALESCE($6, font_size), sort_order = COALESCE($7, sort_order),
+       sheet_data = COALESCE($9::jsonb, sheet_data), checked = COALESCE($10, checked),
        status = CASE WHEN $2 IS NOT NULL AND $2 IS DISTINCT FROM url THEN 'pending' ELSE status END,
        stale_price = CASE WHEN $2 IS NOT NULL AND $2 IS DISTINCT FROM url THEN false ELSE stale_price END
      WHERE id = $8 RETURNING *`,
-    [name, url, qty, bold, italic, font_size, sort_order, req.params.itemId]
+    [name, url, qty, bold, italic, font_size, sort_order, req.params.itemId, sheet_data ? JSON.stringify(sheet_data) : null, checked]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
   const item = result.rows[0];

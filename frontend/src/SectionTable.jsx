@@ -265,6 +265,10 @@ function CostCell({ item, theme, onResolved }) {
 function SectionTable({
   section,
   theme,
+  docType,
+  columnCount,
+  columnLabels,
+  onSetColumnCount,
   onResolved,
   onAddRow,
   onDeleteRow,
@@ -279,6 +283,8 @@ function SectionTable({
   onSectionDragEnd,
   isSectionDragOver,
 }) {
+  const isSheet = docType === "sheet";
+  const numCols = Math.max(1, Math.min(7, columnCount || 3));
   const [rowMenu, setRowMenu] = useState(null);
   const [tableMenu, setTableMenu] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
@@ -357,14 +363,19 @@ function SectionTable({
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setTableMenu({
-          x: e.clientX,
-          y: e.clientY,
-          items: [
-            { label: "Add row", icon: IconPlus, onClick: () => onAddRow(section.id) },
-            { label: "Delete table", icon: IconTrash, onClick: () => onDeleteTable(section.id), danger: true },
-          ],
-        });
+        const items = [
+          { label: "Add row", icon: IconPlus, onClick: () => onAddRow(section.id) },
+        ];
+        if (isSheet) {
+          if (numCols < 7) {
+            items.push({ label: "Add column", icon: IconPlus, onClick: () => onSetColumnCount(numCols + 1) });
+          }
+          if (numCols > 1) {
+            items.push({ label: "Remove column", icon: IconTrash, onClick: () => onSetColumnCount(numCols - 1) });
+          }
+        }
+        items.push({ label: "Delete table", icon: IconTrash, onClick: () => onDeleteTable(section.id), danger: true });
+        setTableMenu({ x: e.clientX, y: e.clientY, items });
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: `1px solid ${theme.border}` }}>
@@ -416,14 +427,27 @@ function SectionTable({
 
       <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <thead>
-          <tr>
-            <th style={{ ...colHeader, width: "6%" }} />
-            <th style={{ ...colHeader, width: "30%" }}>Link</th>
-            <th style={{ ...colHeader, width: "26%" }}>Name</th>
-            <th style={{ ...colHeader, width: "10%", textAlign: "right" }}>QTY</th>
-            <th style={{ ...colHeader, width: "24%", textAlign: "right" }}>Cost</th>
-            <th style={{ ...colHeader, width: "4%" }} />
-          </tr>
+          {isSheet ? (
+            <tr>
+              <th style={{ ...colHeader, width: "6%" }} />
+              {Array.from({ length: numCols }).map((_, i) => (
+                <th key={i} style={{ ...colHeader, width: `${Math.floor(70 / numCols)}%` }}>
+                  {columnLabels?.[i] || `Thing ${i + 1}`}
+                </th>
+              ))}
+              <th style={{ ...colHeader, width: "10%", textAlign: "center" }}>Done</th>
+              <th style={{ ...colHeader, width: "4%" }} />
+            </tr>
+          ) : (
+            <tr>
+              <th style={{ ...colHeader, width: "6%" }} />
+              <th style={{ ...colHeader, width: "30%" }}>Link</th>
+              <th style={{ ...colHeader, width: "26%" }}>Name</th>
+              <th style={{ ...colHeader, width: "10%", textAlign: "right" }}>QTY</th>
+              <th style={{ ...colHeader, width: "24%", textAlign: "right" }}>Cost</th>
+              <th style={{ ...colHeader, width: "4%" }} />
+            </tr>
+          )}
         </thead>
         <tbody>
           {section.items.map((item) => (
@@ -448,7 +472,7 @@ function SectionTable({
               style={{
                 borderBottom: `1px solid ${theme.rowBorder}`,
                 background: dragOverItemId === item.id ? theme.rowBorder : "transparent",
-                opacity: dragItemId === item.id ? 0.4 : 1,
+                opacity: dragItemId === item.id ? 0.4 : (isSheet && item.checked === false ? 0.5 : 1),
               }}
             >
               <td style={{ padding: "2px 4px", textAlign: "center" }}>
@@ -463,38 +487,69 @@ function SectionTable({
                   <IconGrip size={13} color={theme.muted} />
                 </span>
               </td>
-              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                <EditableCell
-                  value={item.url}
-                  placeholder="paste a link…"
-                  theme={theme}
-                  mono
-                  onCommit={(v) => onPatchItem(section.id, item.id, { url: v, status: "pending" })}
-                />
-              </td>
-              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                <EditableCell
-                  value={item.name}
-                  placeholder="item name"
-                  theme={theme}
-                  onCommit={(v) => onPatchItem(section.id, item.id, { name: v })}
-                />
-              </td>
-              <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                <EditableCell
-                  value={String(item.qty ?? 1)}
-                  placeholder="1"
-                  theme={theme}
-                  align="right"
-                  onCommit={(v) => {
-                    const n = parseInt(v, 10);
-                    onPatchItem(section.id, item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
-                  }}
-                />
-              </td>
-              <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                <CostCell item={item} theme={theme} onResolved={onResolved} />
-              </td>
+              {isSheet ? (
+                <>
+                  {Array.from({ length: numCols }).map((_, i) => {
+                    const cells = Array.isArray(item.sheet_data) ? item.sheet_data : [];
+                    return (
+                      <td key={i} style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+                        <EditableCell
+                          value={cells[i] ?? ""}
+                          placeholder={columnLabels?.[i] || `Thing ${i + 1}`}
+                          theme={theme}
+                          onCommit={(v) => {
+                            const next = Array.from({ length: numCols }, (_, j) => (j === i ? v : cells[j] ?? ""));
+                            onPatchItem(section.id, item.id, { sheet_data: next });
+                          }}
+                        />
+                      </td>
+                    );
+                  })}
+                  <td style={{ padding: "2px 6px", textAlign: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={item.checked !== false}
+                      onChange={(e) => onPatchItem(section.id, item.id, { checked: e.target.checked })}
+                      style={{ cursor: "pointer", width: 15, height: 15 }}
+                    />
+                  </td>
+                </>
+              ) : (
+                <>
+                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+                    <EditableCell
+                      value={item.url}
+                      placeholder="paste a link…"
+                      theme={theme}
+                      mono
+                      onCommit={(v) => onPatchItem(section.id, item.id, { url: v, status: "pending" })}
+                    />
+                  </td>
+                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+                    <EditableCell
+                      value={item.name}
+                      placeholder="item name"
+                      theme={theme}
+                      onCommit={(v) => onPatchItem(section.id, item.id, { name: v })}
+                    />
+                  </td>
+                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+                    <EditableCell
+                      value={String(item.qty ?? 1)}
+                      placeholder="1"
+                      theme={theme}
+                      align="right"
+                      onCommit={(v) => {
+                        const n = parseInt(v, 10);
+                        onPatchItem(section.id, item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
+                      }}
+                    />
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                    <CostCell item={item} theme={theme} onResolved={onResolved} />
+                  </td>
+                </>
+              )}
               <td style={{ padding: "2px 4px" }}>
                 <button
                   onClick={() => onDeleteRow(section.id, item.id)}

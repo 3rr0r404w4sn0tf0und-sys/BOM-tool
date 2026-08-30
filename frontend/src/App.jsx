@@ -196,9 +196,46 @@ export default function App() {
     history.push({ undo: revert, redo: apply });
   }, [authHeaders, history]);
 
+  const toggleDocType = useCallback(() => {
+    const current = bomRef.current;
+    if (!current) return;
+    const from = current.doc_type || "bom";
+    const to = from === "sheet" ? "bom" : "sheet";
+
+    function apply(docType) {
+      setBom((prev) => (prev ? { ...prev, doc_type: docType } : prev));
+      setBomList((prev) => (prev ? prev.map((b) => (b.id === current.id ? { ...b, doc_type: docType } : b)) : prev));
+      apiFetch(`${API_URL}/api/boms/${current.id}`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ doc_type: docType }),
+      });
+    }
+    apply(to);
+    history.push({ undo: () => apply(from), redo: () => apply(to) });
+  }, [jsonHeaders, history]);
+
+  const setColumnCount = useCallback((count) => {
+    const current = bomRef.current;
+    if (!current) return;
+    const from = current.column_count || 3;
+    const to = Math.max(1, Math.min(7, count));
+    if (to === from) return;
+
+    function apply(columnCount) {
+      setBom((prev) => (prev ? { ...prev, column_count: columnCount } : prev));
+      apiFetch(`${API_URL}/api/boms/${current.id}/columns`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ column_count: columnCount }),
+      });
+    }
+    apply(to);
+    history.push({ undo: () => apply(from), redo: () => apply(to) });
+  }, [jsonHeaders, history]);
+
   const renameSection = useCallback((sectionId, title) => {
-    const section = bomRef.current.sections.find((s) => s.id === sectionId);
-    if (!section) return;
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);    if (!section) return;
     const before = section.title;
 
     function apply(t) {
@@ -487,13 +524,13 @@ export default function App() {
     }
   }
 
-  async function createBom(title) {
+  async function createBom(title, docType) {
     const res = await apiFetch(`${API_URL}/api/boms`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ title: title || "Untitled BOM" }),
+      body: JSON.stringify({ title: title || (docType === "sheet" ? "Untitled Sheet" : "Untitled BOM"), doc_type: docType || "bom" }),
     });
     const data = await res.json();
     setBomList(null);
@@ -939,7 +976,14 @@ export default function App() {
           setCanvasMenu({
             x: e.clientX,
             y: e.clientY,
-            items: [{ label: "Add table", icon: IconTable, onClick: addTable }],
+            items: [
+              { label: "Add table", icon: IconTable, onClick: addTable },
+              {
+                label: bom.doc_type === "sheet" ? "Convert to BOM" : "Convert to Sheet",
+                icon: IconRefresh,
+                onClick: toggleDocType,
+              },
+            ],
           });
         }}
       >
@@ -985,16 +1029,28 @@ export default function App() {
           <div key="bom-list" className="bom-view-enter">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text }}>Your BOMs</h2>
-              <button
-                onClick={() => createBom("Untitled BOM")}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "8px 14px", border: "none", borderRadius: 9,
-                  background: theme.accent, color: theme.accentText, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
-                }}
-              >
-                <IconPlus size={14} /> New BOM
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => createBom("Untitled BOM", "bom")}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "8px 14px", border: "none", borderRadius: 9,
+                    background: theme.accent, color: theme.accentText, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlus size={14} /> New BOM
+                </button>
+                <button
+                  onClick={() => createBom("Untitled Sheet", "sheet")}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "8px 14px", border: `1px solid ${theme.border}`, borderRadius: 9,
+                    background: theme.cardBg, color: theme.text, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlus size={14} /> New Sheet
+                </button>
+              </div>
             </div>
 
             {bomLoadError && (
@@ -1083,6 +1139,8 @@ export default function App() {
                             animation: "bom-spin 0.6s linear infinite",
                           }}
                         />
+                      ) : b.doc_type === "sheet" ? (
+                        <IconTable size={16} color={theme.muted} />
                       ) : (
                         <IconFolder size={16} color={theme.muted} />
                       )}
@@ -1145,17 +1203,19 @@ export default function App() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-              <button
-                onClick={() => setShowApiModal(true)}
-                title="API access"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
-                  background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                }}
-              >
-                <IconPlug size={13} /> API
-              </button>
+              {bom.doc_type !== "sheet" && (
+                <button
+                  onClick={() => setShowApiModal(true)}
+                  title="API access"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconPlug size={13} /> API
+                </button>
+              )}
               <input
                 ref={sheetFileInputRef}
                 type="file"
@@ -1163,11 +1223,11 @@ export default function App() {
                 onChange={importSheet}
                 style={{ display: "none" }}
               />
-              <RefreshMenu theme={theme} refreshingFilter={refreshingFilter} onSelect={refreshItems} />
+              {bom.doc_type !== "sheet" && <RefreshMenu theme={theme} refreshingFilter={refreshingFilter} onSelect={refreshItems} />}
               <button
                 onClick={triggerSheetUpload}
                 disabled={sheetImporting}
-                title="Import a .xlsx/.xls/.csv (link in col A, qty in col C)"
+                title={bom.doc_type === "sheet" ? "Import a .xlsx/.xls/.csv into this sheet's columns" : "Import a .xlsx/.xls/.csv (link in col A, qty in col C)"}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
                   padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
@@ -1175,7 +1235,7 @@ export default function App() {
                   cursor: sheetImporting ? "default" : "pointer", opacity: sheetImporting ? 0.6 : 1,
                 }}
               >
-                <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import Sheet"}
+                <IconUpload size={13} /> {sheetImporting ? "Importing…" : bom.doc_type === "sheet" ? "Import Sheet (Doc)" : "Import Sheet (BOM)"}
               </button>
               <button
                 onClick={exportSheet}
@@ -1234,7 +1294,7 @@ export default function App() {
             {sheetImportJustSucceeded && (
               <p style={{ color: theme.subtleText, background: theme.rowBorder, padding: "8px 12px", borderRadius: 10, display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5 }}>
                 <span style={{ flexShrink: 0, marginTop: 2 }}><IconRefresh size={13} color={theme.subtleText} /></span>
-                <span>Sheet imported — hit Refresh above to fetch prices for the new items.</span>
+                <span>{bom.doc_type === "sheet" ? "Sheet imported." : "Sheet imported — hit Refresh above to fetch prices for the new items."}</span>
               </p>
             )}
 
@@ -1288,6 +1348,10 @@ export default function App() {
                 key={section.id}
                 section={section}
                 theme={theme}
+                docType={bom.doc_type}
+                columnCount={bom.column_count}
+                columnLabels={bom.column_labels}
+                onSetColumnCount={setColumnCount}
                 onResolved={onItemResolved}
                 onAddRow={addRow}
                 onDeleteRow={deleteRow}
