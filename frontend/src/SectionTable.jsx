@@ -269,6 +269,7 @@ function SectionTable({
   columnCount,
   columnLabels,
   onSetColumnCount,
+  onRenameColumn,
   onResolved,
   onAddRow,
   onDeleteRow,
@@ -285,12 +286,15 @@ function SectionTable({
 }) {
   const isSheet = docType === "sheet";
   const numCols = Math.max(1, Math.min(7, columnCount || 3));
+  const defaultColLabel = (i) => `Row ${String.fromCharCode(65 + i)}`; // Row A, Row B, Row C...
   const [rowMenu, setRowMenu] = useState(null);
   const [tableMenu, setTableMenu] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState(section.title);
   const [dragItemId, setDragItemId] = useState(null);
   const [dragOverItemId, setDragOverItemId] = useState(null);
+  const [editingColIndex, setEditingColIndex] = useState(null);
+  const [colDraft, setColDraft] = useState("");
 
   const sectionDragHandleProps = {
     draggable: true,
@@ -306,6 +310,13 @@ function SectionTable({
     setTitleEditing(false);
     const next = titleDraft.trim();
     if (next && next !== section.title) onRenameSection(section.id, next);
+  }
+
+  function commitColumnLabel(index) {
+    setEditingColIndex(null);
+    const next = colDraft.trim();
+    const current = columnLabels?.[index] || defaultColLabel(index);
+    if (next && next !== current) onRenameColumn(index, next);
   }
 
   function onRowDragStart(e, itemId) {
@@ -432,7 +443,32 @@ function SectionTable({
               <th style={{ ...colHeader, width: "6%" }} />
               {Array.from({ length: numCols }).map((_, i) => (
                 <th key={i} style={{ ...colHeader, width: `${Math.floor(70 / numCols)}%` }}>
-                  {columnLabels?.[i] || `Thing ${i + 1}`}
+                  {editingColIndex === i ? (
+                    <input
+                      autoFocus
+                      value={colDraft}
+                      onChange={(e) => setColDraft(e.target.value)}
+                      onBlur={() => commitColumnLabel(i)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Escape") setEditingColIndex(null);
+                      }}
+                      style={{
+                        width: "100%", boxSizing: "border-box", padding: "2px 5px", fontSize: 11.5,
+                        fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase",
+                        border: `1px solid ${theme.accent}`, borderRadius: 5,
+                        background: theme.cardBg, color: theme.text,
+                      }}
+                    />
+                  ) : (
+                    <span
+                      onClick={() => { setColDraft(columnLabels?.[i] || defaultColLabel(i)); setEditingColIndex(i); }}
+                      title="Click to rename column"
+                      style={{ cursor: "pointer" }}
+                    >
+                      {columnLabels?.[i] || defaultColLabel(i)}
+                    </span>
+                  )}
                 </th>
               ))}
               <th style={{ ...colHeader, width: "10%", textAlign: "center" }}>Done</th>
@@ -472,7 +508,7 @@ function SectionTable({
               style={{
                 borderBottom: `1px solid ${theme.rowBorder}`,
                 background: dragOverItemId === item.id ? theme.rowBorder : "transparent",
-                opacity: dragItemId === item.id ? 0.4 : (isSheet && item.checked === false ? 0.5 : 1),
+                opacity: dragItemId === item.id ? 0.4 : (isSheet && item.checked === true ? 0.5 : 1),
               }}
             >
               <td style={{ padding: "2px 4px", textAlign: "center" }}>
@@ -495,7 +531,7 @@ function SectionTable({
                       <td key={i} style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
                         <EditableCell
                           value={cells[i] ?? ""}
-                          placeholder={columnLabels?.[i] || `Thing ${i + 1}`}
+                          placeholder={columnLabels?.[i] || defaultColLabel(i)}
                           theme={theme}
                           onCommit={(v) => {
                             const next = Array.from({ length: numCols }, (_, j) => (j === i ? v : cells[j] ?? ""));
@@ -508,7 +544,7 @@ function SectionTable({
                   <td style={{ padding: "2px 6px", textAlign: "center" }}>
                     <input
                       type="checkbox"
-                      checked={item.checked !== false}
+                      checked={item.checked === true}
                       onChange={(e) => onPatchItem(section.id, item.id, { checked: e.target.checked })}
                       style={{ cursor: "pointer", width: 15, height: 15 }}
                     />

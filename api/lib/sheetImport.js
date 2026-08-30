@@ -165,7 +165,7 @@ export function parseGenericSheet(buffer, columnCount = 3) {
     }
     const checkboxCell = worksheet[XLSX.utils.encode_cell({ r, c: numCols })];
     const checkboxRaw = checkboxCell && checkboxCell.v != null ? String(checkboxCell.v).trim().toLowerCase() : "";
-    const checked = !["false", "0", "no", "n"].includes(checkboxRaw);
+    const checked = ["true", "1", "yes", "y"].includes(checkboxRaw);
     return { cells, checkboxRaw, checked };
   }
 
@@ -196,7 +196,7 @@ export function parseGenericSheet(buffer, columnCount = 3) {
 
 export function buildGenericSheet(bom) {
   const numCols = Math.max(1, Math.min(7, bom.column_count || 3));
-  const headerLabels = Array.from({ length: numCols }, (_, i) => bom.column_labels?.[i] || `Thing ${i + 1}`);
+  const headerLabels = Array.from({ length: numCols }, (_, i) => bom.column_labels?.[i] || `Row ${String.fromCharCode(65 + i)}`);
   const rows = [];
   const merges = [];
   for (const section of bom.sections || []) {

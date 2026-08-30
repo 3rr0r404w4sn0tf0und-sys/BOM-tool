@@ -93,10 +93,11 @@ export default function App() {
   // so their identity never changes and SectionTable's React.memo holds. ---
 
   const addRow = useCallback(async (sectionId) => {
+    const isSheet = bomRef.current?.doc_type === "sheet";
     const res = await apiFetch(`${API_URL}/api/boms/sections/${sectionId}/items`, {
       method: "POST",
       headers: jsonHeaders(),
-      body: JSON.stringify({ name: "New item", qty: 1 }),
+      body: JSON.stringify(isSheet ? { name: "", qty: 1, checked: false } : { name: "New item", qty: 1 }),
     });
     const item = await res.json();
     setSections((sections) => sections.map((s) => (s.id === sectionId ? { ...s, items: [...s.items, item] } : s)));
@@ -232,6 +233,25 @@ export default function App() {
     }
     apply(to);
     history.push({ undo: () => apply(from), redo: () => apply(to) });
+  }, [jsonHeaders, history]);
+
+  const renameColumn = useCallback((index, label) => {
+    const current = bomRef.current;
+    if (!current) return;
+    const fromLabels = current.column_labels ? [...current.column_labels] : [];
+    const toLabels = [...fromLabels];
+    toLabels[index] = label;
+
+    function apply(labels) {
+      setBom((prev) => (prev ? { ...prev, column_labels: labels } : prev));
+      apiFetch(`${API_URL}/api/boms/${current.id}/columns`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ column_count: current.column_count, column_labels: labels }),
+      });
+    }
+    apply(toLabels);
+    history.push({ undo: () => apply(fromLabels), redo: () => apply(toLabels) });
   }, [jsonHeaders, history]);
 
   const renameSection = useCallback((sectionId, title) => {
@@ -1352,6 +1372,7 @@ export default function App() {
                 columnCount={bom.column_count}
                 columnLabels={bom.column_labels}
                 onSetColumnCount={setColumnCount}
+                onRenameColumn={renameColumn}
                 onResolved={onItemResolved}
                 onAddRow={addRow}
                 onDeleteRow={deleteRow}
@@ -1368,6 +1389,7 @@ export default function App() {
               />
             ))}
 
+            {bom.doc_type !== "sheet" && (
             <div
               style={{
                 background: theme.cardBg,
@@ -1437,6 +1459,7 @@ export default function App() {
                 <span>${bom.totals.total.toFixed(2)}</span>
               </span>
             </div>
+            )}
           </div>
         )}
       </div>
