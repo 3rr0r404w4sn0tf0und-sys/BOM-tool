@@ -248,6 +248,11 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
     font-size: 17px;
   }
   .totals .row { display: flex; justify-content: space-between; padding: 4px 0; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 3px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  html { scrollbar-color: var(--border) var(--bg); scrollbar-width: thin; }
   .totals .row.total { font-weight: 700; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
   .totals .muted { color: var(--muted); font-size: 13px; }
   .footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 16px; }
