@@ -166,15 +166,15 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
 <title>${esc(req.bom.title)}</title>
 <style>
   :root {
-    --bg: #f4f5f7;
-    --card-bg: #ffffff;
-    --header-bg: #1f2430;
+    --bg: #14171f;
+    --card-bg: #1c202b;
+    --header-bg: #0d0f16;
     --header-text: #ffffff;
-    --border: #d8dbe0;
-    --text: #1f2430;
-    --muted: #6b7280;
-    --failed: #c0392b;
-    --accent: #2f6fed;
+    --border: #333947;
+    --text: #e7e9ee;
+    --muted: #9095a3;
+    --failed: #ff7a6b;
+    --accent: #5b9cff;
   }
   * { box-sizing: border-box; }
   body {
@@ -219,13 +219,23 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--muted);
-    background: var(--bg);
+    background: var(--header-bg);
     border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     padding: 8px 16px;
   }
+  .col-headers th:last-child { border-right: none; }
   .col-headers .qty, .col-headers .price { text-align: right; }
-  td { font-size: 17px; padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  td {
+    font-size: 17px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  td:last-child { border-right: none; }
   tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
   td.name { text-align: left; word-break: break-word; }
   td.qty { text-align: right; width: 70px; color: var(--muted); }
   td.price { text-align: right; width: 110px; font-variant-numeric: tabular-nums; }
