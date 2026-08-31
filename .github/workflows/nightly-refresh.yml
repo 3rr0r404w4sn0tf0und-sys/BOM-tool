@@ -5,6 +5,13 @@ on:
     - cron: "0 0 * * *"   # 12:00 AM UTC daily -- adjust for your timezone if needed
   workflow_dispatch: {}    # lets you trigger it manually from the Actions tab too
 
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-refresh
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -18,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
+          pip install -r scraper/requirements.txt
 
       - name: Refresh all item prices
         env:

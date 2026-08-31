@@ -74,8 +74,15 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
   if (!EMAIL_RE.test(trimmedEmail)) {
     return res.status(400).json({ error: "Enter a valid email address" });
   }
-  if (password.length < 8) {
-    return res.status(400).json({ error: "Password must be at least 8 characters" });
+  if (password.length < 12) {
+    return res.status(400).json({ error: "Password must be at least 12 characters" });
+  }
+  // bcrypt only uses the first 72 bytes of the input -- anything beyond
+  // that is silently ignored, which would let two different long
+  // passwords that share the same first 72 bytes hash identically.
+  // Reject upfront instead of truncating silently.
+  if (Buffer.byteLength(password, "utf8") > 72) {
+    return res.status(400).json({ error: "Password must be 72 bytes or fewer (UTF-8)" });
   }
 
   try {

@@ -4,6 +4,13 @@ on:
   repository_dispatch:
     types: [scrape-request]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-item-${{ github.event.client_payload.item_id }}
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -15,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
+        run: pip install -r scraper/requirements.txt
 
       - name: Scrape and report result
         env:
@@ -24,7 +31,7 @@ jobs:
           URL: ${{ github.event.client_payload.url }}
           CALLBACK_URL: ${{ github.event.client_payload.callback_url }}
           INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
-          APIFY_TOKEN: ${{ github.event.client_payload.apify_token }}
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
         run: python scraper/actions_scrape_one.py

@@ -19,6 +19,47 @@ function decodeXmlEntities(str) {
     .replace(/&apos;/g, "'");
 }
 
+// Logical resource limits on top of the 10MB upload-size cap (multer,
+// boms.js) -- a small file can still decode into a huge number of
+// cells/rows and burn CPU/memory building the parsed result, so cap the
+// shape of the workbook itself before iterating over it.
+const MAX_SHEETS = 10;
+const MAX_ROWS = 10000;
+const MAX_CELL_LENGTH = 4000;
+
+export class SheetTooLargeError extends Error {}
+const MAX_ITEMS_PER_IMPORT = 2000;
+const MAX_SECTIONS_PER_IMPORT = 200;
+
+function enforceParsedLimits(parsed) {
+  if (parsed.sections.length > MAX_SECTIONS_PER_IMPORT) {
+    throw new SheetTooLargeError(`Too many sections (${parsed.sections.length}, max ${MAX_SECTIONS_PER_IMPORT})`);
+  }
+  const totalItems = parsed.sections.reduce((sum, s) => sum + s.items.length, 0);
+  if (totalItems > MAX_ITEMS_PER_IMPORT) {
+    throw new SheetTooLargeError(`Too many rows (${totalItems}, max ${MAX_ITEMS_PER_IMPORT})`);
+  }
+}
+
+function enforceWorkbookLimits(workbook, worksheet) {
+  if (workbook.SheetNames.length > MAX_SHEETS) {
+    throw new SheetTooLargeError(`Workbook has too many sheets (max ${MAX_SHEETS})`);
+  }
+  if (worksheet && worksheet["!ref"]) {
+    const range = XLSX.utils.decode_range(worksheet["!ref"]);
+    const rowCount = range.e.r - range.s.r + 1;
+    if (rowCount > MAX_ROWS) {
+      throw new SheetTooLargeError(`Sheet has too many rows (${rowCount}, max ${MAX_ROWS})`);
+    }
+  }
+}
+
+function clampCell(value) {
+  if (value === null || value === undefined) return value;
+  const str = String(value);
+  return str.length > MAX_CELL_LENGTH ? str.slice(0, MAX_CELL_LENGTH) : str;
+}
+
 // Parses an uploaded spreadsheet (.xlsx, .xls, .csv) into BOM sections/items,
 // following the fixed column layout the user's BOM sheets use:
 //   Column A: item link (cell hyperlink) — its visible text is ignored as a
@@ -36,6 +77,7 @@ export function parseSheet(buffer) {
   const sheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[sheetName];
   if (!worksheet || !worksheet["!ref"]) return { sections: [] };
+  enforceWorkbookLimits(workbook, worksheet);
 
   const range = XLSX.utils.decode_range(worksheet["!ref"]);
   const sections = [];
@@ -47,8 +89,8 @@ export function parseSheet(buffer) {
     const cCell = worksheet[XLSX.utils.encode_cell({ r, c: 2 })]; // qty
     // column D (index 3) is intentionally never read
 
-    const aText = aCell && aCell.v != null ? String(aCell.v).trim() : "";
-    const bText = bCell && bCell.v != null ? String(bCell.v).trim() : "";
+    const aText = aCell && aCell.v != null ? clampCell(String(aCell.v).trim()) : "";
+    const bText = bCell && bCell.v != null ? clampCell(String(bCell.v).trim()) : "";
     const qtyRaw = cCell && cCell.v != null ? cCell.v : null;
     const hasQty = qtyRaw !== null && qtyRaw !== "";
 
@@ -90,11 +132,12 @@ export function parseSheet(buffer) {
     });
   }
 
-  return { sections: sections.filter((s) => s.items.length > 0) };
+  const result = { sections: sections.filter((s) => s.items.length > 0) };
+  enforceParsedLimits(result);
+  return result;
 }
 
 // Builds a .xlsx buffer in the same fixed column layout parseSheet() reads:
-//   A: item link -- the URL itself as the cell's visible text, also set as
 //      a real hyperlink. Blank when the item has no URL.
 //   B: item name
 //   C: quantity
@@ -151,6 +194,7 @@ export function parseGenericSheet(buffer, columnCount = 3) {
   const sheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[sheetName];
   if (!worksheet || !worksheet["!ref"]) return { sections: [] };
+  enforceWorkbookLimits(workbook, worksheet);
 
   const range = XLSX.utils.decode_range(worksheet["!ref"]);
   const numCols = Math.max(1, Math.min(7, columnCount));
@@ -161,7 +205,7 @@ export function parseGenericSheet(buffer, columnCount = 3) {
     const cells = [];
     for (let c = 0; c < numCols; c++) {
       const cell = worksheet[XLSX.utils.encode_cell({ r, c })];
-      cells.push(cell && cell.v != null ? String(cell.v).trim() : "");
+      cells.push(cell && cell.v != null ? clampCell(String(cell.v).trim()) : "");
     }
     const checkboxCell = worksheet[XLSX.utils.encode_cell({ r, c: numCols })];
     const checkboxRaw = checkboxCell && checkboxCell.v != null ? String(checkboxCell.v).trim().toLowerCase() : "";
@@ -191,7 +235,9 @@ export function parseGenericSheet(buffer, columnCount = 3) {
     current.items.push({ sheet_data: cells, checked });
   }
 
-  return { sections: sections.filter((s) => s.items.length > 0) };
+  const result = { sections: sections.filter((s) => s.items.length > 0) };
+  enforceParsedLimits(result);
+  return result;
 }
 
 export function buildGenericSheet(bom) {

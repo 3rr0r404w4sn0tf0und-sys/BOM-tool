@@ -3,6 +3,7 @@ import express from "express";
 import { pool } from "../db/pool.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { hostnameMatches } from "../lib/urlValidation.js";
+import { decryptSecret } from "../lib/secretCrypto.js";
 
 export const internalRouter = express.Router();
 
@@ -21,6 +22,43 @@ function requireInternalSecret(req, res, next) {
   if (!valid) return res.status(401).json({ error: "Invalid internal secret" });
   next();
 }
+
+// GET /api/internal/apify-credential?job_id=...
+// Lets the GitHub Actions runner fetch the BOM owner's Apify token for a
+// specific, currently-active scrape job, authenticated with the same
+// internal secret as the result callback below -- instead of the token
+// being placed directly into the repository_dispatch client_payload
+// (visible in GitHub's event/workflow metadata). The credential is only
+// returned while some item still has this exact job_id set, which
+// happens to double as a natural expiry: once every item in the job has
+// been reported back (scrape-result clears scrape_job_id) or a newer
+// refresh has replaced it, this stops returning anything for that job.
+internalRouter.get("/apify-credential", requireInternalSecret, asyncHandler(async (req, res) => {
+  const jobId = req.query.job_id;
+  if (!jobId || typeof jobId !== "string") return res.status(400).json({ error: "job_id required" });
+
+  const ownerResult = await pool.query(
+    `SELECT boms.user_id FROM items
+     JOIN sections ON items.section_id = sections.id
+     JOIN boms ON sections.bom_id = boms.id
+     WHERE items.scrape_job_id = $1
+     LIMIT 1`,
+    [jobId]
+  );
+  const userId = ownerResult.rows[0]?.user_id;
+  if (!userId) return res.status(404).json({ error: "No active job with that id" });
+
+  const tokenResult = await pool.query("SELECT apify_token_encrypted FROM users WHERE id = $1", [userId]);
+  const encrypted = tokenResult.rows[0]?.apify_token_encrypted;
+  if (!encrypted) return res.json({ apify_token: null });
+
+  try {
+    res.json({ apify_token: decryptSecret(encrypted) || null });
+  } catch (e) {
+    console.error("Failed to decrypt Apify token for internal credential fetch:", e);
+    res.json({ apify_token: null });
+  }
+}));
 
 internalRouter.post("/scrape-result", requireInternalSecret, asyncHandler(async (req, res) => {
   const { item_id, job_id, found, price, source, error } = req.body;

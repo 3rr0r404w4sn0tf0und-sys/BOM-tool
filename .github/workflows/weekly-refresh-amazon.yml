@@ -5,6 +5,13 @@ on:
     - cron: "0 0 1,15 * *"   # Midnight UTC on the 1st and 15th of each month (~every 2 weeks)
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-refresh-amazon
+  cancel-in-progress: false
+
 jobs:
   refresh-amazon:
     runs-on: ubuntu-latest
@@ -18,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
+          pip install -r scraper/requirements.txt
 
       - name: Refresh Amazon item prices
         env:

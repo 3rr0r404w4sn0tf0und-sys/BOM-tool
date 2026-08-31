@@ -6,12 +6,24 @@ import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth, requireCsrf } from "../middleware/auth.js";
 import { calculateTotals } from "../db/totals.js";
-import { parseSheet, buildSheetFromBom, parseGenericSheet, buildGenericSheet } from "../lib/sheetImport.js";
+import { parseSheet, buildSheetFromBom, parseGenericSheet, buildGenericSheet, SheetTooLargeError } from "../lib/sheetImport.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { optionalString, optionalNumber, optionalBoolean, optionalEnum, optionalSheetData } from "../lib/validation.js";
 import { validateProductUrl } from "../lib/urlValidation.js";
 import { triggerScrape, triggerBatchScrape } from "../lib/scrapeDispatcher.js";
+import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
 import rateLimit from "express-rate-limit";
+
+// public_api_key is never stored raw -- see migrations/012_hashed_api_keys.sql.
+// hashApiKey() is used for the lookup column, encryptSecret() lets the
+// UI still display the existing key without regenerating it.
+function hashApiKey(rawKey) {
+  return crypto.createHash("sha256").update(rawKey).digest("hex");
+}
+function generateApiKey() {
+  const raw = crypto.randomBytes(24).toString("hex");
+  return { raw, hash: hashApiKey(raw), encrypted: encryptSecret(raw) };
+}
 
 export const bomsRouter = express.Router();
 const scrapeLimiter = rateLimit({
@@ -20,12 +32,6 @@ const scrapeLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { error: "Too many scrape requests. Try again later." },
-  // Default keyGenerator buckets by IP. This router runs behind
-  // requireAuth, so req.userId is always set by the time this fires --
-  // bucket per user instead, so multiple people on the same office
-  // NAT/VPN/coworking-space IP don't share (and unfairly exhaust) one
-  // scrape-request allowance.
-  keyGenerator: (req) => req.userId || req.ip,
 });
 bomsRouter.use(requireAuth);
 bomsRouter.use(requireCsrf);
@@ -68,7 +74,14 @@ export async function getOwnedItem(itemId, userId) {
 // uploading giant spreadsheets, just a BOM a few hundred rows long.
 const sheetUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,      // one spreadsheet per request
+    fields: 2,      // only expect a couple of non-file form fields, if any
+    fieldNameSize: 100,
+    fieldSize: 1024,
+    parts: 10,
+  },
 });
 
 function validateBody(fn, res) {
@@ -89,15 +102,15 @@ bomsRouter.post("/", asyncHandler(async (req, res) => {
   if (res.locals.validationFailed) return;
   const column_count = validateBody(() => optionalNumber(req.body?.column_count, "column_count", { min: 1, max: 7 }), res);
   if (res.locals.validationFailed) return;
-  const apiKey = crypto.randomBytes(24).toString("hex");
+  const apiKey = generateApiKey();
   const resolvedType = doc_type || "bom";
   const resolvedTitle = title || (resolvedType === "sheet" ? "Untitled Sheet" : "Untitled BOM");
   const result = await pool.query(
-    `INSERT INTO boms (user_id, title, public_api_key, doc_type, column_count)
-     VALUES ($1, $2, $3, $4, COALESCE($5, 3)) RETURNING *`,
-    [req.userId, resolvedTitle, apiKey, resolvedType, column_count]
+    `INSERT INTO boms (user_id, title, public_api_key_hash, public_api_key_encrypted, doc_type, column_count)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, 3)) RETURNING *`,
+    [req.userId, resolvedTitle, apiKey.hash, apiKey.encrypted, resolvedType, column_count]
   );
-  res.json(result.rows[0]);
+  res.json({ ...result.rows[0], public_api_key: apiKey.raw });
 }));
 
 bomsRouter.get("/", asyncHandler(async (req, res) => {
@@ -105,7 +118,7 @@ bomsRouter.get("/", asyncHandler(async (req, res) => {
     "SELECT * FROM boms WHERE user_id = $1 ORDER BY updated_at DESC",
     [req.userId]
   );
-  res.json(result.rows);
+  res.json(result.rows.map(({ public_api_key_hash, public_api_key_encrypted, ...b }) => b));
 }));
 
 // Full BOM with sections + items + calculated totals
@@ -151,7 +164,12 @@ bomsRouter.get("/:id", asyncHandler(async (req, res) => {
 
   const totals = calculateTotals(allItems, bom.tax_rate);
 
-  res.json({ ...bom, sections: sectionsWithItems, totals });
+  // Decrypt for display -- see hashApiKey()/generateApiKey() comment
+  // above for why this isn't the raw DB column anymore.
+  const publicApiKey = bom.public_api_key_encrypted ? decryptSecret(bom.public_api_key_encrypted) : null;
+  const { public_api_key_hash, public_api_key_encrypted, ...bomSafe } = bom;
+
+  res.json({ ...bomSafe, public_api_key: publicApiKey, sections: sectionsWithItems, totals });
 }));
 
 bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
@@ -201,19 +219,20 @@ bomsRouter.patch("/:id/columns", asyncHandler(async (req, res) => {
 // key stops matching any row in Neon and every embed/integration using it
 // starts getting 401s until they're updated with the new one.
 bomsRouter.post("/:id/regenerate-key", asyncHandler(async (req, res) => {
-  const newKey = crypto.randomBytes(24).toString("hex");
+  const newKey = generateApiKey();
   const result = await pool.query(
-    `UPDATE boms SET public_api_key = $1, updated_at = now()
-     WHERE id = $2 AND user_id = $3 RETURNING *`,
-    [newKey, req.params.id, req.userId]
+    `UPDATE boms SET public_api_key_hash = $1, public_api_key_encrypted = $2, updated_at = now()
+     WHERE id = $3 AND user_id = $4 RETURNING *`,
+    [newKey.hash, newKey.encrypted, req.params.id, req.userId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
-  res.json(result.rows[0]);
+  const { public_api_key_hash, public_api_key_encrypted, ...bomSafe } = result.rows[0];
+  res.json({ ...bomSafe, public_api_key: newKey.raw });
 }));
 
 bomsRouter.delete("/:id/public-api-key", asyncHandler(async (req, res) => {
   const result = await pool.query(
-    `UPDATE boms SET public_api_key = NULL, public_api_key_last_used_at = NULL, updated_at = now()
+    `UPDATE boms SET public_api_key_hash = NULL, public_api_key_encrypted = NULL, public_api_key_last_used_at = NULL, updated_at = now()
      WHERE id = $1 AND user_id = $2 RETURNING id`,
     [req.params.id, req.userId]
   );
@@ -348,6 +367,9 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
       : parseSheet(req.file.buffer);
   }
   catch (e) {
+    if (e instanceof SheetTooLargeError) {
+      return res.status(400).json({ error: e.message });
+    }
     console.error("Failed to parse uploaded sheet:", e);
     return res.status(400).json({ error: "Could not parse file. Supported: .xlsx, .xls, .csv" });
   }

@@ -10,6 +10,16 @@ and the item never gets stuck on "pending" forever.
 import os
 import sys
 import requests
+
+# Must happen before the apify_* imports below -- they read
+# os.environ["APIFY_TOKEN"] once at import time.
+from fetch_apify_credential import fetch_apify_token
+_job_id_for_token_fetch = os.environ.get("JOB_ID")
+if _job_id_for_token_fetch:
+    _token = fetch_apify_token(_job_id_for_token_fetch)
+    if _token:
+        os.environ["APIFY_TOKEN"] = _token
+
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape
 from apify_generic_scrape import try_apify_generic_scrape

@@ -4,6 +4,13 @@ on:
   repository_dispatch:
     types: [bom-batch-scrape-request]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-bom-${{ github.event.client_payload.bom_id }}
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -15,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -r scraper/requirements.txt psycopg2-binary==2.9.9
+        run: pip install -r scraper/requirements.txt
 
       - name: Scrape every matching item in this BOM
         env:
@@ -23,7 +30,8 @@ jobs:
           JOB_ID: ${{ github.event.client_payload.job_id }}
           FILTER: ${{ github.event.client_payload.filter }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          APIFY_TOKEN: ${{ github.event.client_payload.apify_token }}
+          INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
           APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}

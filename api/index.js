@@ -14,6 +14,48 @@ import { auditMutations } from "./middleware/audit.js";
 const app = express();
 app.set("trust proxy", 1);
 
+// Refuse to boot in production with missing/weak/placeholder secrets --
+// far better to fail loudly at deploy time than to silently run with a
+// short JWT_SECRET or a leftover "changeme" value that makes sessions,
+// CSRF tokens, or encrypted Apify credentials trivially forgeable.
+function validateProductionSecrets() {
+  if (process.env.NODE_ENV !== "production") return;
+
+  const DEV_LOOKING = /^(dev|test|change ?me|placeholder|secret|password|example)$/i;
+  const problems = [];
+
+  function checkSecret(name, { minLength = 32 } = {}) {
+    const value = process.env[name];
+    if (!value) { problems.push(`${name} is not set`); return; }
+    if (value.length < minLength) problems.push(`${name} is too short (need >= ${minLength} chars)`);
+    if (DEV_LOOKING.test(value.trim())) problems.push(`${name} looks like a placeholder/dev value`);
+  }
+
+  checkSecret("JWT_SECRET");
+  checkSecret("SECRET_ENCRYPTION_KEY");
+  checkSecret("INTERNAL_SCRAPE_SECRET");
+  // GITHUB_DISPATCH_TOKEN/GITHUB_OAUTH_CLIENT_SECRET/email creds are only
+  // required if those features are actually wired up -- don't force every
+  // deployment to configure OAuth/GitHub dispatch/email just to boot.
+  if (process.env.GITHUB_DISPATCH_TOKEN) checkSecret("GITHUB_DISPATCH_TOKEN", { minLength: 16 });
+  if (process.env.GITHUB_OAUTH_CLIENT_ID) checkSecret("GITHUB_OAUTH_CLIENT_SECRET", { minLength: 16 });
+
+  const frontendUrl = process.env.FRONTEND_URL || "";
+  const apiPublicUrl = process.env.API_PUBLIC_URL || "";
+  if (!frontendUrl || /localhost|127\.0\.0\.1/.test(frontendUrl)) {
+    problems.push("FRONTEND_URL is unset or points at localhost in production");
+  }
+  if (!apiPublicUrl || /localhost|127\.0\.0\.1/.test(apiPublicUrl)) {
+    problems.push("API_PUBLIC_URL is unset or points at localhost in production");
+  }
+
+  if (problems.length) {
+    console.error("Refusing to start: invalid production configuration:\n" + problems.map((p) => `  - ${p}`).join("\n"));
+    process.exit(1);
+  }
+}
+validateProductionSecrets();
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -69,8 +111,19 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many authentication requests. Try again later." },
 });
+// Tighter than the general auth limiter above -- login specifically is
+// the route credential-stuffing/brute-force tools actually hit, so it
+// gets a stricter per-IP cap on top of the general one.
+const loginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many login attempts. Try again later." },
+});
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+app.use("/api/auth/login", loginLimiter);
 app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/boms", bomsRouter);
 app.use("/api/public", publicRouter); // BOM Clean / BOM Links, for Odoo etc.

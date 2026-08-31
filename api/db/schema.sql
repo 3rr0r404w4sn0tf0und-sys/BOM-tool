@@ -43,7 +43,8 @@ CREATE TABLE boms (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT 'Untitled BOM',
     tax_rate NUMERIC(6,4) NOT NULL DEFAULT 0, -- e.g. 0.08 for Philly
-    public_api_key TEXT UNIQUE, -- used by Odoo / external calls
+    public_api_key_hash TEXT, -- sha256(raw key); used for auth lookup, not reversible
+    public_api_key_encrypted TEXT, -- AES-256-GCM encrypted raw key, so the UI can still display it
     public_api_key_last_used_at TIMESTAMPTZ,
     zip_code TEXT, -- optional, used for location-accurate Amazon pricing via Apify
     doc_type TEXT NOT NULL DEFAULT 'bom' CHECK (doc_type IN ('bom', 'sheet')),
@@ -97,7 +98,7 @@ CREATE TABLE items (
 CREATE INDEX idx_sections_bom_id ON sections(bom_id);
 CREATE INDEX idx_items_section_id ON items(section_id);
 CREATE INDEX idx_boms_user_id ON boms(user_id);
-CREATE INDEX idx_boms_api_key ON boms(public_api_key);
+CREATE UNIQUE INDEX idx_boms_api_key_hash ON boms(public_api_key_hash) WHERE public_api_key_hash IS NOT NULL;
 CREATE INDEX idx_items_active_scrape_job ON items(scrape_job_id) WHERE scrape_job_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_users_oauth ON users(oauth_provider, oauth_id) WHERE oauth_provider IS NOT NULL;
 CREATE INDEX idx_boms_doc_type ON boms(user_id, doc_type);

@@ -9,7 +9,13 @@ const COOKIE_SECURE = IS_PROD;
 // SameSite=None. The readable CSRF cookie + Origin check below protects
 // state-changing requests from cross-site forgery.
 const COOKIE_SAMESITE = IS_PROD ? "none" : "lax";
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// 30 days was the original default. 14 days trims the exposure window if
+// a session cookie/JWT ever leaks, while still being long enough that
+// people aren't getting logged out mid-week. Sessions are also fully
+// revocable server-side (see revokeSession/logout-all above) regardless
+// of this value, since the JWT alone isn't checked -- getSessionFromRequest
+// always re-verifies against the sessions table.
+const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 function makeCsrfToken(sessionId) {
   return crypto.createHmac("sha256", process.env.JWT_SECRET).update(`csrf:${sessionId}`).digest("hex");
 }
@@ -38,7 +44,7 @@ export async function revokeSession(sessionId) {
 }
 
 export function issueSessionToken(userId, sessionId) {
-  return jwt.sign({ userId, sid: sessionId }, process.env.JWT_SECRET, { expiresIn: "30d" });
+  return jwt.sign({ userId, sid: sessionId }, process.env.JWT_SECRET, { expiresIn: "14d" });
 }
 
 export function setAuthCookie(res, token) {

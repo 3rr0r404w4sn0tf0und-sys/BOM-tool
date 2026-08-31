@@ -4,6 +4,13 @@ on:
   repository_dispatch:
     types: [captcha-scrape-request]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-item-${{ github.event.client_payload.item_id }}
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
