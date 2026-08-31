@@ -162,15 +162,15 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
 <title>${esc(bom.title)}</title>
 <style>
   :root {
-    --bg: #f4f5f7;
-    --card-bg: #ffffff;
-    --header-bg: #1f2430;
+    --bg: #14171f;
+    --card-bg: #1c202b;
+    --header-bg: #0d0f16;
     --header-text: #ffffff;
-    --border: #d8dbe0;
-    --text: #1f2430;
-    --muted: #6b7280;
-    --failed: #c0392b;
-    --accent: #2f6fed;
+    --border: #333947;
+    --text: #e7e9ee;
+    --muted: #9095a3;
+    --failed: #ff7a6b;
+    --accent: #5b9cff;
   }
   * { box-sizing: border-box; }
   body {
