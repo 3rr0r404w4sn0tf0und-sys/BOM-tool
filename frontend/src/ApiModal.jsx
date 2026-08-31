@@ -183,15 +183,21 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
               {keyRevealed ? key : maskedKey}
             </code>
             <button
-              onMouseDown={() => setKeyRevealed(true)}
-              onMouseUp={() => setKeyRevealed(false)}
-              onMouseLeave={() => setKeyRevealed(false)}
-              onTouchStart={(e) => { e.preventDefault(); setKeyRevealed(true); }}
-              onTouchEnd={() => setKeyRevealed(false)}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setKeyRevealed(true);
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                setKeyRevealed(false);
+              }}
+              onPointerCancel={() => setKeyRevealed(false)}
               title="Hold to reveal"
               style={{
                 border: "none", background: "none", cursor: "pointer", display: "flex", flexShrink: 0,
                 fontSize: 11, fontWeight: 600, color: theme.muted, padding: "2px 6px",
+                width: 78, justifyContent: "center", touchAction: "none",
               }}
             >
               {keyRevealed ? "Hide" : "Hold to show"}
