@@ -15,11 +15,85 @@ Dead / offline links are detected and reported as "link_failed" rather
 than raising -- callers should never crash on this.
 """
 
+import ipaddress
 import json
 import re
 import random
+import socket
+from urllib.parse import urlparse
+
 import requests
 from bs4 import BeautifulSoup
+
+# The API validates the URL a user submits against private/loopback/link-
+# local ranges before it's ever stored (see api/lib/urlValidation.js), but
+# that check only looks at the URL *as submitted*. Two things can slip past
+# it and land here instead, potentially much later (nightly/weekly refresh
+# jobs run hours or days after a URL was saved):
+#
+#   1. DNS rebinding -- a hostname that resolved to a public IP at submit
+#      time can be repointed at an internal/loopback address by the time
+#      this job actually connects.
+#   2. Open redirects -- a validated public URL can 302 straight to an
+#      internal address; `requests` with allow_redirects=True follows that
+#      without re-checking it against anything.
+#
+# _SAFE_ variants below close both gaps for the actual outbound request:
+# every hostname is resolved and its IP checked before connecting, and
+# redirects are followed manually (capped) with the same check re-run on
+# each hop, instead of letting `requests` auto-follow them.
+_MAX_REDIRECTS = 5
+
+
+def _is_disallowed_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # can't parse it -> treat as unsafe
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _assert_safe_url(url: str):
+    """Resolves the URL's hostname and rejects it if any resolved address
+    is private/loopback/link-local/etc. Raises ValueError on rejection."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"disallowed scheme: {parsed.scheme}")
+    if not parsed.hostname:
+        raise ValueError("URL has no hostname")
+    try:
+        addrs = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as e:
+        raise ValueError(f"DNS resolution failed: {e}")
+    for family, _, _, _, sockaddr in addrs:
+        ip_str = sockaddr[0]
+        if _is_disallowed_ip(ip_str):
+            raise ValueError(f"resolved to a disallowed address: {ip_str}")
+
+
+def _safe_get(url: str, headers: dict, timeout: int):
+    """requests.get, but with manual redirect handling so every hop
+    (including the initial URL) is re-validated against private/local
+    addresses right before connecting."""
+    current_url = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        _assert_safe_url(current_url)
+        resp = requests.get(current_url, headers=headers, timeout=timeout, allow_redirects=False)
+        if resp.is_redirect or resp.is_permanent_redirect:
+            location = resp.headers.get("Location")
+            if not location:
+                return resp
+            current_url = requests.compat.urljoin(current_url, location)
+            continue
+        return resp
+    raise ValueError("too many redirects")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -96,7 +170,11 @@ def _clean_price(raw):
 def try_generic_scrape(url: str) -> dict:
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     try:
-        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        resp = _safe_get(url, headers=headers, timeout=10)
+    except ValueError as e:
+        # Blocked by the SSRF guard above (private/local target, bad
+        # scheme, DNS failure, or too many redirects).
+        return {"found": False, "error": f"link_failed: {e}"}
     except requests.exceptions.RequestException as e:
         return {"found": False, "error": f"link_failed: {e}"}
 

@@ -20,6 +20,12 @@ const scrapeLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { error: "Too many scrape requests. Try again later." },
+  // Default keyGenerator buckets by IP. This router runs behind
+  // requireAuth, so req.userId is always set by the time this fires --
+  // bucket per user instead, so multiple people on the same office
+  // NAT/VPN/coworking-space IP don't share (and unfairly exhaust) one
+  // scrape-request allowance.
+  keyGenerator: (req) => req.userId || req.ip,
 });
 bomsRouter.use(requireAuth);
 bomsRouter.use(requireCsrf);
