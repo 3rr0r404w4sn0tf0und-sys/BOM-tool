@@ -31,7 +31,11 @@ jobs:
           FILTER: ${{ github.event.client_payload.filter }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           INTERNAL_SCRAPE_SECRET: ${{ secrets.INTERNAL_SCRAPE_SECRET }}
-          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
+          # Not actually sensitive (it's the same host baked into every public
+          # iframe URL) -- default it so a missing secret can't silently break
+          # the callback/credential fetch. secrets.API_PUBLIC_URL still wins if
+          # you ever set it, e.g. to point at a staging deploy.
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL || 'https://bom-tool-ampf.onrender.com' }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
           APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
