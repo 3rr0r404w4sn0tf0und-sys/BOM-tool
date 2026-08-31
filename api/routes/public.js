@@ -239,6 +239,11 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
   .totals .muted { color: var(--muted); font-size: 13px; }
   .footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 16px; }
   .footer a { color: var(--accent); text-decoration: none; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 3px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  html { scrollbar-color: var(--border) var(--bg); scrollbar-width: thin; }
 </style>
 </head>
 <body>

@@ -214,6 +214,14 @@ export function parseGenericSheet(buffer, columnCount = 3) {
   }
 
   for (let r = range.s.r; r <= range.e.r; r++) {
+    if (r === range.s.r) {
+      // buildGenericSheet() always writes a header-labels row ("University
+      // name" / "Contact email" / ... / "Done") as the very first row of
+      // the sheet -- it's column labels, not a section or an item, so skip
+      // it unconditionally rather than letting it fall through into the
+      // "no section yet" branch below and get ingested as a data row.
+      continue;
+    }
     const { cells, checkboxRaw, checked } = readRowCells(r);
     const rowIsBlank = cells.every((c) => !c) && !checkboxRaw;
     if (rowIsBlank) continue;
