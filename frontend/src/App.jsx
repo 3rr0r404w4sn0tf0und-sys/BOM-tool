@@ -776,6 +776,76 @@ export default function App() {
     }
   }
 
+  // --- URL routing (no react-router; the app only has 4 "pages") ---
+  // Paths: /login, /register, /home, /sheet/<25-char id>. This effect runs
+  // once auth-check resolves and interprets whatever path the tab opened
+  // with, so a bookmarked or shared link lands on the right screen instead
+  // of always dumping the person on "/".
+  const pendingDeepLinkBomId = useRef(null);
+  useEffect(() => {
+    if (authChecking) return;
+    const path = window.location.pathname;
+    const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
+    if (!token) {
+      // Not logged in: only /login and /register are meaningful; anything
+      // else (including a deep-linked /sheet/<id>) falls back to /login,
+      // but remembers the sheet id so we can jump straight there post-login.
+      if (sheetMatch) pendingDeepLinkBomId.current = sheetMatch[1];
+      if (path === "/register") setMode("register");
+      else setMode("login");
+      return;
+    }
+    if (sheetMatch) {
+      loadBom(sheetMatch[1]);
+    }
+    // token is set but path was /login, /register, "/", or anything else
+    // unrecognized: just let it fall through to /home below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authChecking, token]);
+
+  // If someone opened a /sheet/<id> link while logged out, once login
+  // succeeds jump straight into that BOM instead of landing on /home.
+  useEffect(() => {
+    if (token && pendingDeepLinkBomId.current) {
+      const id = pendingDeepLinkBomId.current;
+      pendingDeepLinkBomId.current = null;
+      loadBom(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // Keep the address bar in sync with whatever screen is actually showing,
+  // so refresh/back/forward/share-link all do the right thing.
+  useEffect(() => {
+    if (authChecking) return;
+    const path = !token
+      ? mode === "register" ? "/register" : "/login"
+      : bom ? `/sheet/${bom.id}` : "/home";
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, "", path);
+    }
+  }, [authChecking, token, mode, bom]);
+
+  // Support the browser's back/forward buttons.
+  useEffect(() => {
+    function onPopState() {
+      const path = window.location.pathname;
+      const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
+      if (!token) {
+        setMode(path === "/register" ? "register" : "login");
+        return;
+      }
+      if (sheetMatch) {
+        if (!bom || bom.id !== sheetMatch[1]) loadBom(sheetMatch[1]);
+      } else if (bom) {
+        exitBom();
+      }
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, bom]);
+
   // Load the BOM list once we know who's logged in and haven't opened a BOM.
   useEffect(() => {
     if (token && user && !bom && bomList === null) loadBomList();
