@@ -82,70 +82,34 @@ function priceLabel(item) {
   return Number(item.unit_price).toFixed(2);
 }
 
-// GET /api/public/bom-clean
-// Full formatted BOM with sections + emoji titles, grouped rows, totals.
-publicRouter.get("/bom-clean", getBomByApiKey, asyncHandler(async (req, res) => {
-  const { sections, items } = await loadFullBom(req.bom);
-  const totals = calculateTotals(items, req.bom.tax_rate);
+// Belt-and-suspenders: item.url should already be http(s)-only from
+// urlValidation.js at write time, but this route renders straight into
+// an href with no further checks, so re-verify the scheme here too --
+// a bad value that slipped in through some other path (direct DB edit,
+// future import path, etc.) should never become a javascript: link.
+function safeHref(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
 
-  const formattedSections = sections.map((s) => ({
-    title: s.title,
-    emoji: s.emoji,
-    icon_url: s.icon_url,
-    rows: s.items.map((i) => ({
-      item: i.name,
-      qty: Number(i.qty),
-      price: priceLabel(i),
-      link: i.url || null,
-      bold: i.bold,
-      italic: i.italic,
-      font_size: i.font_size,
-    })),
-  }));
-
-  res.json({
-    title: req.bom.title,
-    sections: formattedSections,
-    subtotal: totals.subtotal.toFixed(2),
-    tax: totals.tax.toFixed(2),
-    total: totals.total.toFixed(2),
-    excluded_items: totals.excludedCount,
-    ...footer(),
-  });
-}));
-
-// GET /api/public/bom-html
-// Same data as bom-clean, rendered as a ready-to-embed standalone HTML
-// page (proper <table>, right-aligned $ prices, one consistent font
-// size). Meant to be dropped into an <iframe> (e.g. on an Odoo page)
-// instead of making the host site build its own table from the JSON
-// feed -- avoids every embedder reinventing (and often mangling) the
-// same layout.
-publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
-  const { sections, items } = await loadFullBom(req.bom);
-  const totals = calculateTotals(items, req.bom.tax_rate);
-
+// Shared renderer for both /bom-html (showPrice: true) and
+// /bom-links-html (showPrice: false) -- same layout either way, just
+// with or without the price column, and the item name as a visibly
+// underlined link (instead of an invisible-color one) when there's no
+// price column drawing the eye.
+function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
     ));
 
-  // Belt-and-suspenders: item.url should already be http(s)-only from
-  // urlValidation.js at write time, but this route renders straight into
-  // an href with no further checks, so re-verify the scheme here too --
-  // a bad value that slipped in through some other path (direct DB edit,
-  // future import path, etc.) should never become a javascript: link.
-  const safeHref = (url) => {
-    if (!url) return null;
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === "http:" || parsed.protocol === "https:" ? url : null;
-    } catch {
-      return null;
-    }
-  };
-
   const money = (n) => `$${Number(n).toFixed(2)}`;
+  const colspan = showPrice ? 3 : 2;
 
   const sectionsHtml = sections.map((s) => {
     const rowsHtml = s.items.map((i) => {
@@ -157,13 +121,16 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
       const priceText = priceOk ? money(i.unit_price) : "Link Failed";
       const href = safeHref(i.url);
       const nameHtml = href
-        ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none;">${esc(i.name)}</a>`
+        ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="${showPrice ? "" : "visible-link"}" style="${showPrice ? "color:inherit;text-decoration:none;" : ""}">${esc(i.name)}</a>`
         : esc(i.name);
+      const priceCell = showPrice
+        ? `<td class="price${priceOk ? "" : " price-failed"}">${priceText}</td>`
+        : "";
       return `
         <tr>
           <td class="name" style="${nameStyle}">${nameHtml}</td>
           <td class="qty">${Number(i.qty)}</td>
-          <td class="price${priceOk ? "" : " price-failed"}">${priceText}</td>
+          ${priceCell}
         </tr>`;
     }).join("");
 
@@ -175,24 +142,24 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
       <table class="bom-section">
         <thead>
           <tr class="section-title-row">
-            <th colspan="3">${icon}${esc(s.title)}</th>
+            <th colspan="${colspan}">${icon}${esc(s.title)}</th>
           </tr>
           <tr class="col-headers">
             <th class="name">Name</th>
             <th class="qty">Qty</th>
-            <th class="price">Cost</th>
+            ${showPrice ? `<th class="price">Cost</th>` : ""}
           </tr>
         </thead>
         <tbody>${rowsHtml}</tbody>
       </table>`;
   }).join("\n");
 
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(req.bom.title)}</title>
+<title>${esc(bom.title)}</title>
 <style>
   :root {
     --bg: #f4f5f7;
@@ -259,6 +226,7 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
   td.qty { text-align: right; width: 70px; color: var(--muted); }
   td.price { text-align: right; width: 110px; font-variant-numeric: tabular-nums; }
   td.price-failed { color: var(--failed); font-style: italic; font-size: 14px; }
+  a.visible-link { color: var(--accent); text-decoration: underline; }
   .totals {
     background: var(--card-bg);
     border: 1px solid var(--border);
@@ -275,7 +243,7 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
 </head>
 <body>
   <div class="bom-wrap">
-    <h1>${esc(req.bom.title)}</h1>
+    <h1>${esc(bom.title)}</h1>
     ${sectionsHtml}
     <div class="totals">
       <div class="row"><span>Subtotal</span><span>${money(totals.subtotal)}</span></div>
@@ -287,7 +255,9 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
   </div>
 </body>
 </html>`;
+}
 
+function sendEmbeddableHtml(res, html) {
   res.set("Content-Type", "text/html; charset=utf-8");
   // Allow this to be framed by any site -- like /api/public/* generally,
   // the security boundary is the api_key in the URL, not the embedding
@@ -303,6 +273,61 @@ publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
     "img-src https: http:; style-src 'unsafe-inline'; frame-ancestors *"
   );
   res.send(html);
+}
+
+// GET /api/public/bom-clean
+// Full formatted BOM with sections + emoji titles, grouped rows, totals.
+publicRouter.get("/bom-clean", getBomByApiKey, asyncHandler(async (req, res) => {
+  const { sections, items } = await loadFullBom(req.bom);
+  const totals = calculateTotals(items, req.bom.tax_rate);
+
+  const formattedSections = sections.map((s) => ({
+    title: s.title,
+    emoji: s.emoji,
+    icon_url: s.icon_url,
+    rows: s.items.map((i) => ({
+      item: i.name,
+      qty: Number(i.qty),
+      price: priceLabel(i),
+      link: i.url || null,
+      bold: i.bold,
+      italic: i.italic,
+      font_size: i.font_size,
+    })),
+  }));
+
+  res.json({
+    title: req.bom.title,
+    sections: formattedSections,
+    subtotal: totals.subtotal.toFixed(2),
+    tax: totals.tax.toFixed(2),
+    total: totals.total.toFixed(2),
+    excluded_items: totals.excludedCount,
+    ...footer(),
+  });
+}));
+
+// GET /api/public/bom-html
+// Ready-to-embed standalone HTML page: Name / Qty / Cost per row, proper
+// <table>, right-aligned $ prices, one consistent font size. Meant to be
+// dropped into an <iframe> instead of making the host site build its own
+// table from the JSON feed -- avoids every embedder reinventing (and
+// often mangling) the same layout.
+publicRouter.get("/bom-html", getBomByApiKey, asyncHandler(async (req, res) => {
+  const { sections, items } = await loadFullBom(req.bom);
+  const totals = calculateTotals(items, req.bom.tax_rate);
+  sendEmbeddableHtml(res, renderBomHtmlPage(req.bom, sections, totals, { showPrice: true }));
+}));
+
+// GET /api/public/bom-links-html
+// Same embeddable page, but Name/Qty only, with the name as a clearly
+// visible (colored + underlined) link -- for cases where the point is
+// "here's where to buy each part," not a live price table. Totals still
+// show once at the bottom, same as bom-html.
+publicRouter.get("/bom-links-html", getBomByApiKey, asyncHandler(async (req, res) => {
+  const { sections, items } = await loadFullBom(req.bom);
+  const totals = calculateTotals(items, req.bom.tax_rate);
+  sendEmbeddableHtml(res, renderBomHtmlPage(req.bom, sections, totals, { showPrice: false }));
 }));
 
 // GET /api/public/bom-links

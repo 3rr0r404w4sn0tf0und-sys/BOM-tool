@@ -57,6 +57,13 @@ export default function Footer({ theme, onPrivacyClick }) {
       >
         Privacy
       </button>
+      <span style={{ opacity: 0.5 }}>·</span>
+      <a
+        href="mailto:modudroneteam@hotmail.com"
+        style={{ color: theme.linkColor }}
+      >
+        Contact
+      </a>
     </footer>
   );
 }

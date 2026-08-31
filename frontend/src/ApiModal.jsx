@@ -96,11 +96,15 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
   const [confirmingRegen, setConfirmingRegen] = useState(false);
   const [regenError, setRegenError] = useState(null);
 
+  const [keyRevealed, setKeyRevealed] = useState(false);
+
   const key = bom.public_api_key;
-  const cleanUrl = `${API_URL}/api/public/bom-clean?api_key=${key}`;
-  const linksUrl = `${API_URL}/api/public/bom-links?api_key=${key}`;
   const htmlUrl = `${API_URL}/api/public/bom-html?api_key=${key}`;
+  const htmlLinksUrl = `${API_URL}/api/public/bom-links-html?api_key=${key}`;
+  const linksUrl = `${API_URL}/api/public/bom-links?api_key=${key}`; // used only to build the Sheets Apps Script below, never shown directly
   const iframeSnippet = `<iframe src="${htmlUrl}" style="width:100%;border:none;min-height:600px;" title="${bom.title.replace(/"/g, "&quot;")} BOM"></iframe>`;
+  const iframeLinksSnippet = `<iframe src="${htmlLinksUrl}" style="width:100%;border:none;min-height:600px;" title="${bom.title.replace(/"/g, "&quot;")} BOM (links)"></iframe>`;
+  const maskedKey = "•".repeat(Math.min(key.length, 40));
 
   async function regenerateKey() {
     setRegenerating(true);
@@ -162,17 +166,55 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
           Read-only endpoints, scoped to this BOM only. Anyone with this key can view (but not edit) it — treat it like a password.
         </p>
 
-        <CopyRow label="API key" value={key} theme={theme} />
-        <CopyRow label="Formatted (sections, totals, bold/italic) — for docs/reports" value={cleanUrl} theme={theme} />
-        <CopyRow label="Flat rows (item, price, link) — for spreadsheets" value={linksUrl} theme={theme} />
-        <CopyRow label="Ready-styled HTML page — for embedding directly" value={htmlUrl} theme={theme} />
-
         <div style={{ marginBottom: 14 }}>
-          <CopyCodeButton label="Copy <iframe> embed snippet" getCode={() => iframeSnippet} theme={theme} />
+          <div style={{ fontSize: 12, fontWeight: 600, color: theme.muted, marginBottom: 4 }}>API key</div>
+          <div
+            style={{
+              display: "flex", alignItems: "center", gap: 8,
+              background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 8, padding: "8px 10px",
+            }}
+          >
+            <code
+              style={{
+                flex: 1, fontSize: 12, color: theme.text, overflowX: "auto", whiteSpace: "nowrap",
+                fontFamily: "monospace", userSelect: keyRevealed ? "text" : "none",
+              }}
+            >
+              {keyRevealed ? key : maskedKey}
+            </code>
+            <button
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setKeyRevealed(true);
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                setKeyRevealed(false);
+              }}
+              onPointerCancel={() => setKeyRevealed(false)}
+              title="Hold to reveal"
+              style={{
+                border: "none", background: "none", cursor: "pointer", display: "flex", flexShrink: 0,
+                fontSize: 11, fontWeight: 600, color: theme.muted, padding: "2px 6px",
+                width: 78, justifyContent: "center", touchAction: "none",
+              }}
+            >
+              {keyRevealed ? "Hide" : "Hold to show"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 6 }}>
+          <CopyCodeButton label="Copy <iframe> embed snippet (table: name, qty, price)" getCode={() => iframeSnippet} theme={theme} />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <CopyCodeButton label="Copy <iframe> embed snippet (links: name + qty only)" getCode={() => iframeLinksSnippet} theme={theme} />
         </div>
         <p style={{ fontSize: 12, color: theme.subtleText, margin: "-8px 0 14px", lineHeight: 1.5 }}>
-          Drop that snippet into any page (Odoo included) to show a fully formatted, styled table without
-          building your own — no need to parse the JSON feed yourself.
+          Drop either snippet into any page (Odoo included) for a fully styled, self-contained table — no JSON parsing needed.
+          The first shows price per item; the second shows just names (as clickable links to each product) and quantities,
+          with totals still shown once at the bottom.
         </p>
 
         <div style={{ marginTop: -4, marginBottom: 4 }}>
