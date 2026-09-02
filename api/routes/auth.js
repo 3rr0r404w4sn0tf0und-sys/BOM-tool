@@ -2,6 +2,7 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
 import { pool } from "../db/pool.js";
 import { sendVerificationEmail } from "../lib/mailer.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -24,6 +25,8 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 // Render API's own public URL -- OAuth providers redirect back to this
 // server (not the frontend) so we can exchange the code server-side.
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "http://localhost:4000";
+const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
+const ONBOARDING_TOKEN_MAX_AGE = "15m";
 
 const OAUTH_STATE_COOKIE = "bom-oauth-state";
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -49,17 +52,44 @@ function clearOAuthState(res) {
 
 function makeVerificationToken() {
   const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
-  return { token, expires };
+  return { token, tokenHash, expires };
+}
+
+function normalizeUsername(username) {
+  return typeof username === "string" ? username.trim() : "";
+}
+
+function validateUsername(username) {
+  const value = normalizeUsername(username);
+  if (!USERNAME_RE.test(value)) {
+    return "Username must be 3–24 characters and use only letters, numbers, and underscores";
+  }
+  return null;
+}
+
+function issueOnboardingToken(userId) {
+  return jwt.sign({ purpose: "onboarding", userId }, process.env.JWT_SECRET, { expiresIn: ONBOARDING_TOKEN_MAX_AGE });
+}
+
+function verifyOnboardingToken(token) {
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.purpose !== "onboarding" || !payload.userId) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 async function issueVerificationEmail(userId, email) {
-  const { token, expires } = makeVerificationToken();
+  const { token, tokenHash, expires } = makeVerificationToken();
   await pool.query(
     "UPDATE users SET verification_token = $1, verification_token_expires = $2 WHERE id = $3",
-    [token, expires, userId]
+    [tokenHash, expires, userId]
   );
-  const verifyUrl = `${FRONTEND_URL}/?verify_token=${token}`;
+  const verifyUrl = `${FRONTEND_URL}/finish?verify_token=${token}`;
   return sendVerificationEmail(email, verifyUrl);
 }
 
@@ -92,15 +122,13 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
       [trimmedEmail, hash]
     );
     const user = result.rows[0];
-    const sessionId = await createSession(user.id);
-    const token = issueSessionToken(user.id, sessionId);
 
     const emailResult = await issueVerificationEmail(user.id, user.email);
     if (!emailResult.sent) {
       console.warn(`Verification email not sent for ${user.email}: ${emailResult.error}`);
     }
 
-    setAuthCookie(res, token);
+    // Do not create a session until the email is verified and onboarding is complete.
     res.json({ user, verificationEmailSent: emailResult.sent });
   } catch (e) {
     if (e.code === "23505") {
@@ -127,34 +155,54 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
   if (!(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
+  if (!user.email_verified) {
+    return res.status(403).json({ error: "Please verify your email before logging in", code: "EMAIL_NOT_VERIFIED" });
+  }
   const sessionId = await createSession(user.id);
   const token = issueSessionToken(user.id, sessionId);
   setAuthCookie(res, token);
   res.json({
-    user: { id: user.id, email: user.email, email_verified: user.email_verified },
+    user: { id: user.id, email: user.email, email_verified: user.email_verified, username: user.username },
   });
 }));
 
 authRouter.post("/verify", asyncHandler(async (req, res) => {
   const { token } = req.body;
-  if (!token) return res.status(400).json({ error: "token required" });
+  if (!token || typeof token !== "string") return res.status(400).json({ error: "token required" });
 
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   const result = await pool.query(
-    "SELECT id, verification_token_expires FROM users WHERE verification_token = $1",
-    [token]
+    "SELECT id, email_verified, verification_token_expires FROM users WHERE verification_token = $1",
+    [tokenHash]
   );
   const user = result.rows[0];
-  if (!user) {
-    return res.status(400).json({ error: "Invalid or already-used verification link" });
-  }
-  if (new Date(user.verification_token_expires) < new Date()) {
+  if (!user) return res.status(400).json({ error: "Invalid or already-used verification link" });
+  if (!user.verification_token_expires || new Date(user.verification_token_expires) < new Date()) {
     return res.status(400).json({ error: "Verification link expired. Request a new one." });
   }
+
   await pool.query(
     "UPDATE users SET email_verified = true, verification_token = NULL, verification_token_expires = NULL WHERE id = $1",
     [user.id]
   );
-  res.json({ verified: true });
+
+  // This is deliberately an onboarding-only token, not a normal authenticated session.
+  // It expires quickly and can only be used to finish the account profile.
+  res.json({ verified: true, onboardingToken: issueOnboardingToken(user.id) });
+}));
+authRouter.post("/resend-verification-public", verificationResendLimiter, asyncHandler(async (req, res) => {
+  const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase().trim() : "";
+  if (!EMAIL_RE.test(email)) return res.json({ sent: true }); // don't reveal account existence
+  const result = await pool.query(
+    "SELECT id, email, email_verified FROM users WHERE email = $1",
+    [email]
+  );
+  const user = result.rows[0];
+  if (!user || user.email_verified) return res.json({ sent: true });
+  const emailResult = await issueVerificationEmail(user.id, user.email);
+  // Deliberately keep the response generic so this endpoint cannot be used
+  // as an email-account enumeration oracle.
+  res.json({ sent: !!emailResult.sent });
 }));
 
 authRouter.post("/resend-verification", verificationResendLimiter, requireCsrf, asyncHandler(async (req, res) => {
@@ -179,12 +227,78 @@ authRouter.get("/me", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
   const result = await pool.query(
-    "SELECT id, email, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
+    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
     [auth.payload.userId]
   );
   const user = result.rows[0];
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json({ user, csrfToken: getCsrfTokenForSession(auth.payload.sid) });
+}));
+
+// ---------- Username / onboarding ----------
+
+authRouter.get("/username/check", asyncHandler(async (req, res) => {
+  const username = normalizeUsername(req.query.username);
+  const validationError = validateUsername(username);
+  if (validationError) return res.json({ valid: false, available: false, error: validationError });
+  const result = await pool.query(
+    "SELECT 1 FROM users WHERE lower(username) = lower($1) LIMIT 1",
+    [username]
+  );
+  res.json({ valid: true, available: result.rowCount === 0 });
+}));
+
+authRouter.post("/complete-profile", asyncHandler(async (req, res) => {
+  const { onboardingToken, username } = req.body || {};
+  const payload = verifyOnboardingToken(onboardingToken);
+  if (!payload) return res.status(401).json({ error: "Onboarding session expired. Please verify your email again." });
+  const validationError = validateUsername(username);
+  if (validationError) return res.status(400).json({ error: validationError });
+  const normalized = normalizeUsername(username);
+
+  try {
+    const result = await pool.query(
+      `UPDATE users SET username = $1
+       WHERE id = $2 AND email_verified = true AND username IS NULL
+       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token`,
+      [normalized, payload.userId]
+    );
+    if (!result.rows[0]) return res.status(409).json({ error: "Account setup has already been completed" });
+    const sessionId = await createSession(payload.userId);
+    const sessionToken = issueSessionToken(payload.userId, sessionId);
+    setAuthCookie(res, sessionToken);
+    res.json({ user: result.rows[0], csrfToken: getCsrfTokenForSession(sessionId) });
+  } catch (e) {
+    if (e.code === "23505") return res.status(409).json({ error: "That username is already taken", code: "USERNAME_TAKEN" });
+    throw e;
+  }
+}));
+authRouter.get("/account", asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
+  const result = await pool.query(
+    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
+    [auth.payload.userId]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "User not found" });
+  res.json({ user: result.rows[0] });
+}));
+
+authRouter.patch("/username", requireCsrf, asyncHandler(async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const validationError = validateUsername(username);
+  if (validationError) return res.status(400).json({ error: validationError });
+  try {
+    const result = await pool.query(
+      `UPDATE users SET username = $1 WHERE id = $2
+       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token`,
+      [username, req.userId]
+    );
+    res.json({ user: result.rows[0] });
+  } catch (e) {
+    if (e.code === "23505") return res.status(409).json({ error: "That username is already taken", code: "USERNAME_TAKEN" });
+    throw e;
+  }
 }));
 
 // A user's own Apify token, so BOM scrapes run against their Apify account
@@ -277,10 +391,12 @@ async function findOrCreateOAuthUser({ provider, providerId, email }) {
 // OAuth callback stores the session in an HttpOnly cookie, then redirects
 // to the frontend without exposing the session token in the URL.
 async function redirectWithToken(res, userId) {
+  const result = await pool.query("SELECT username FROM users WHERE id = $1", [userId]);
+  const needsFinish = !result.rows[0]?.username;
   const sessionId = await createSession(userId);
   const token = issueSessionToken(userId, sessionId);
   setAuthCookie(res, token);
-  res.redirect(FRONTEND_URL);
+  res.redirect(`${FRONTEND_URL}${needsFinish ? "/finish" : "/home"}`);
 }
 
 function redirectWithError(res, message) {

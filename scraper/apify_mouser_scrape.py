@@ -158,7 +158,7 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_MOUSER_ACTOR_ID.replace('/', '~')}"
-        f"/run-sync-get-dataset-items?token={token}"
+        "/run-sync-get-dataset-items"
     )
 
     run_input = {
@@ -169,7 +169,7 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
     timeout = min(120 + 15 * len(urls), 900)
 
     try:
-        resp = requests.post(endpoint, json=run_input, timeout=timeout)
+        resp = requests.post(endpoint, json=run_input, headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
         resp.raise_for_status()
         items = resp.json()
     except requests.HTTPError as e:

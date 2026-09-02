@@ -25,6 +25,10 @@ function generateApiKey() {
   const raw = crypto.randomBytes(24).toString("hex");
   return { raw, hash: hashApiKey(raw), encrypted: encryptSecret(raw) };
 }
+function safeBom(bom) {
+  const { public_api_key_hash, public_api_key_encrypted, ...safe } = bom;
+  return safe;
+}
 
 export const bomsRouter = express.Router();
 const scrapeLimiter = rateLimit({
@@ -110,7 +114,7 @@ bomsRouter.post("/", asyncHandler(async (req, res) => {
      VALUES ($1, $2, $3, $4, $5, COALESCE($6, 3)) RETURNING *`,
     [req.userId, resolvedTitle, apiKey.hash, apiKey.encrypted, resolvedType, column_count]
   );
-  res.json({ ...result.rows[0], public_api_key: apiKey.raw });
+  res.json({ ...safeBom(result.rows[0]), public_api_key: apiKey.raw });
 }));
 
 bomsRouter.get("/", asyncHandler(async (req, res) => {
@@ -205,7 +209,7 @@ bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
     [title, tax_rate, doc_type, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
-  res.json(result.rows[0]);
+  res.json(safeBom(result.rows[0]));
 }));
 
 // Change a sheet's column count (1-7). Existing rows' sheet_data arrays
@@ -234,7 +238,7 @@ bomsRouter.patch("/:id/columns", asyncHandler(async (req, res) => {
     [column_count, column_labels === undefined ? null : column_labels, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Sheet not found" });
-  res.json(result.rows[0]);
+  res.json(safeBom(result.rows[0]));
 }));
 
 // Rotate the public API key for this BOM. The old key is overwritten in
@@ -426,6 +430,12 @@ bomsRouter.patch("/:bomId/sections/reorder", asyncHandler(async (req, res) => {
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: "orderedIds must be a non-empty array" });
   }
+  if (orderedIds.length > 1000 || orderedIds.some((id) => typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))) {
+    return res.status(400).json({ error: "orderedIds contains an invalid section id or is too large" });
+  }
+  if (new Set(orderedIds).size !== orderedIds.length) {
+    return res.status(400).json({ error: "orderedIds cannot contain duplicates" });
+  }
   if (!await userOwnsBom(req.params.bomId, req.userId, "editor")) {
     return res.status(404).json({ error: "BOM not found" });
   }
@@ -444,7 +454,14 @@ bomsRouter.patch("/:bomId/sections/reorder", asyncHandler(async (req, res) => {
 }));
 
 bomsRouter.patch("/sections/:sectionId", asyncHandler(async (req, res) => {
-  const { title, emoji, icon_url, sort_order } = req.body;
+  const title = validateBody(() => optionalString(req.body?.title, "title", 200), res);
+  if (title === null && req.body?.title !== undefined && req.body?.title !== null) return;
+  const emoji = validateBody(() => optionalString(req.body?.emoji, "emoji", 32), res);
+  if (emoji === null && req.body?.emoji !== undefined && req.body?.emoji !== null) return;
+  const icon_url = validateBody(() => optionalString(req.body?.icon_url, "icon_url", 2000), res);
+  if (icon_url === null && req.body?.icon_url !== undefined && req.body?.icon_url !== null) return;
+  const sort_order = validateBody(() => optionalNumber(req.body?.sort_order, "sort_order", { min: 0, max: 1000000 }), res);
+  if (res.locals.validationFailed) return;
   if (!await getOwnedSection(req.params.sectionId, req.userId)) {
     return res.status(404).json({ error: "Section not found" });
   }

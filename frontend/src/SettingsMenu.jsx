@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ThemeToggle from "./ThemeToggle.jsx";
 import { IconGear, IconLogout, IconPlug } from "./Icons.jsx";
 
-export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout, hasApifyToken, onManageApifyKey }) {
+export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout, hasApifyToken, onManageApifyKey, onAccountSettings }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -85,6 +85,14 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
         {isLoggedIn && (
           <>
             <div style={{ height: 1, background: theme.border, margin: "6px 0", transition: "background-color 500ms ease" }} />
+            {onAccountSettings && (
+              <button
+                onClick={() => { setOpen(false); onAccountSettings(); }}
+                style={{ width: "100%", textAlign: "left", padding: "8px 10px", border: "none", background: "none", cursor: "pointer", fontSize: 14, color: theme.text, borderRadius: 6 }}
+              >
+                Account settings
+              </button>
+            )}
             {onManageApifyKey && (
               <button
                 onClick={() => {

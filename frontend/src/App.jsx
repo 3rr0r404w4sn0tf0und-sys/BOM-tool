@@ -15,9 +15,10 @@ import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
 import { useBomPolling } from "./useBomPolling.js";
 import RefreshMenu from "./RefreshMenu.jsx";
+import FinishSignup from "./FinishSignup.jsx";
+import AccountSettings from "./AccountSettings.jsx";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
-const VERIFY_PENDING_SECONDS = 15;
 
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
@@ -38,11 +39,12 @@ export default function App() {
   const [verifyStatus, setVerifyStatus] = useState(null); // null | "checking" | "success" | "error"
   const [verifyMessage, setVerifyMessage] = useState(null);
   const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
+  const [onboardingToken, setOnboardingToken] = useState(() => { try { return sessionStorage.getItem("bom-onboarding-token"); } catch { return null; } });
+  const [accountSettings, setAccountSettings] = useState(false);
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [justRegisteredEmail, setJustRegisteredEmail] = useState(null);
-  const [verifyCountdown, setVerifyCountdown] = useState(VERIFY_PENDING_SECONDS);
   const [authChecking, setAuthChecking] = useState(true);
   const [canvasMenu, setCanvasMenu] = useState(null);
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
@@ -368,24 +370,6 @@ export default function App() {
     }
   }, []);
 
-  // Countdown + auto-close for the "verification email sent" interstitial
-  // shown right after registering (Brevo sends a link, not a code, so there's
-  // nothing to type here — the tab is safe to close).
-  useEffect(() => {
-    if (!justRegisteredEmail) return;
-    setVerifyCountdown(VERIFY_PENDING_SECONDS);
-    const interval = setInterval(() => {
-      setVerifyCountdown((s) => {
-        if (s <= 1) {
-          clearInterval(interval);
-          window.close();
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [justRegisteredEmail]);
 
   async function logout() {
     try {
@@ -398,6 +382,9 @@ export default function App() {
     setEmail("");
     setPassword("");
     setConfirmPassword("");
+    setOnboardingToken(null);
+    try { sessionStorage.removeItem("bom-onboarding-token"); } catch {}
+    setAccountSettings(false);
   }
 
   // On load, ask the API whether the HttpOnly session cookie is still valid.
@@ -413,6 +400,7 @@ export default function App() {
         if (data.user) {
           setToken("session");
           setUser(data.user);
+          if (data.user.username) setAccountSettings(window.location.pathname === "/settings/account");
         } else {
           setToken(null);
           setUser(null);
@@ -429,44 +417,63 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // On load, check for the email-verification link or an OAuth error.
-  // Successful OAuth callbacks set the HttpOnly session cookie on the API before redirecting here.
+  // Email verification links land directly on /finish. The raw verification
+  // token is exchanged once for a short-lived onboarding token, then removed
+  // from the URL. No normal session is created until onboarding is complete.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get("verify_token");
     const oauthError = params.get("oauth_error");
-
     if (oauthError) {
       setAuthError(oauthError);
       window.history.replaceState({}, "", window.location.pathname);
       return;
     }
     if (!verifyToken) return;
-
     setVerifyStatus("checking");
     apiFetch(`${API_URL}/api/auth/verify`, {
       method: "POST",
+      skipCsrf: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: verifyToken }),
     })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.verified) {
-          setVerifyStatus("success");
-          setVerifyMessage("Email verified! You can log in now.");
-          setUser((u) => (u ? { ...u, email_verified: true } : u));
-        } else {
-          setVerifyStatus("error");
-          setVerifyMessage(data.error || "Verification failed.");
-        }
-        // Clean the token out of the URL so refreshing doesn't re-submit it.
-        window.history.replaceState({}, "", window.location.pathname);
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Verification failed.");
+        return data;
       })
-      .catch(() => {
+      .then((data) => {
+        setVerifyStatus("success");
+        setVerifyMessage("Email verified! Finish setting up your account below.");
+        if (data.onboardingToken) {
+          setOnboardingToken(data.onboardingToken);
+          try { sessionStorage.setItem("bom-onboarding-token", data.onboardingToken); } catch {}
+        }
+        window.history.replaceState({}, "", "/finish");
+      })
+      .catch((e) => {
         setVerifyStatus("error");
-        setVerifyMessage("Could not reach the server to verify. Try again.");
+        setVerifyMessage(e.message || "Verification failed.");
+        window.history.replaceState({}, "", "/login");
       });
   }, []);
+
+  function finishSignup(userData) {
+    setOnboardingToken(null);
+    try { sessionStorage.removeItem("bom-onboarding-token"); } catch {}
+    setSession(null, userData);
+    setAccountSettings(false);
+    setVerifyStatus(null);
+    setVerifyMessage(null);
+    setJustRegisteredEmail(null);
+    window.history.replaceState({}, "", "/home");
+  }
+
+  function openAccountSettings() {
+    setBom(null);
+    setAccountSettings(true);
+    window.history.pushState({}, "", "/settings/account");
+  }
 
   function loginWithGithub() {
     window.location.href = `${API_URL}/api/auth/github/start`;
@@ -501,6 +508,8 @@ export default function App() {
       const data = await res.json();
       if (data.user) {
         setSession(null, data.user);
+      } else if (data.code === "EMAIL_NOT_VERIFIED") {
+        setAuthError("Please verify your email first. Check your inbox for the verification link, then log in again.");
       } else setAuthError(data.error || "Login failed");
     } catch (e) {
       setAuthError("Could not reach the server. It may be waking up — try again in a few seconds.");
@@ -523,7 +532,8 @@ export default function App() {
       });
       const data = await res.json();
       if (data.user) {
-        setSession(null, data.user);
+        setToken(null);
+        setUser(null);
         setJustRegisteredEmail(email.trim());
       } else setAuthError(data.error || "Registration failed");
     } catch (e) {
@@ -545,6 +555,17 @@ export default function App() {
     } catch {
       setResendStatus("error");
     }
+  }
+
+  async function resendVerificationPublic() {
+    setResendStatus("sending");
+    try {
+      const res = await apiFetch(`${API_URL}/api/auth/resend-verification-public`, {
+        method: "POST", skipCsrf: true, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: justRegisteredEmail }),
+      });
+      setResendStatus(res.ok ? "sent" : "error");
+    } catch { setResendStatus("error"); }
   }
 
   async function createBom(title, docType) {
@@ -797,6 +818,7 @@ export default function App() {
     const path = window.location.pathname;
     const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
     if (!token) {
+      if (path === "/finish" && onboardingToken) return;
       // Not logged in: only /login and /register are meaningful; anything
       // else (including a deep-linked /sheet/<id>) falls back to /login,
       // but remembers the sheet id so we can jump straight there post-login.
@@ -829,12 +851,12 @@ export default function App() {
   useEffect(() => {
     if (authChecking) return;
     const path = !token
-      ? mode === "register" ? "/register" : "/login"
-      : bom ? `/sheet/${bom.id}` : "/home";
+      ? (onboardingToken ? "/finish" : mode === "register" ? "/register" : "/login")
+      : accountSettings ? "/settings/account" : bom ? `/sheet/${bom.id}` : "/home";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  }, [authChecking, token, mode, bom]);
+  }, [authChecking, token, mode, bom, onboardingToken, accountSettings]);
 
   // Support the browser's back/forward buttons.
   useEffect(() => {
@@ -842,9 +864,12 @@ export default function App() {
       const path = window.location.pathname;
       const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
       if (!token) {
+        if (path === "/finish" && onboardingToken) return;
         setMode(path === "/register" ? "register" : "login");
         return;
       }
+      if (path === "/settings/account") { setAccountSettings(true); return; }
+      setAccountSettings(false);
       if (sheetMatch) {
         if (!bom || bom.id !== sheetMatch[1]) loadBom(sheetMatch[1]);
       } else if (bom) {
@@ -879,6 +904,19 @@ export default function App() {
     );
   }
 
+  if (onboardingToken && !token) {
+    return <FinishSignup theme={theme} user={user} onboardingToken={onboardingToken} onComplete={finishSignup} />;
+  }
+
+  if (token && user && !user.username) {
+    return (
+      <>
+        <div style={{ ...pageShell, filter: "blur(2px)", pointerEvents: "none" }} />
+        <FinishSignup theme={theme} user={user} onComplete={finishSignup} modal />
+      </>
+    );
+  }
+
   if (justRegisteredEmail) {
     return (
         <div style={pageShell}>
@@ -906,8 +944,11 @@ export default function App() {
               Check your inbox <strong>and your spam/junk folder</strong> — click the link there to verify.
             </p>
             <p style={{ color: theme.muted, fontSize: 13 }}>
-              This tab will close automatically in {verifyCountdown}s.
+              You can leave this page open or close it. Clicking the link in the email will take you to the final setup page.
             </p>
+            <button onClick={resendVerificationPublic} disabled={resendStatus === "sending"} style={{ marginTop: 4, padding: "8px 14px", border: `1px solid ${theme.border}`, borderRadius: 8, background: theme.cardBg, color: theme.text, cursor: "pointer" }}>
+              {resendStatus === "sending" ? "Sending…" : resendStatus === "sent" ? "Sent — check your inbox" : "Resend verification email"}
+            </button>
             <button
               onClick={() => window.close()}
               style={{
@@ -1014,7 +1055,7 @@ export default function App() {
                 style={{ width: "100%", padding: 10, marginBottom: 8, boxSizing: "border-box", border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 14, background: theme.bg, color: theme.text }}
               />
               <input
-                placeholder="password (min 8 characters)"
+                placeholder="password (min 12 characters)"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -1064,6 +1105,10 @@ export default function App() {
     );
   }
 
+  if (accountSettings) {
+    return <AccountSettings theme={theme} user={user} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/home"); }} onUpdated={(u) => setUser(u)} />;
+  }
+
   return (
     <div style={pageShell}>
       <div
@@ -1097,6 +1142,7 @@ export default function App() {
             onLogout={logout}
             hasApifyToken={!!user?.has_apify_token}
             onManageApifyKey={() => setShowApifyKeyModal(true)}
+            onAccountSettings={openAccountSettings}
           />
         </div>
 

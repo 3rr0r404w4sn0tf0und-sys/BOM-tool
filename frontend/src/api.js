@@ -31,13 +31,12 @@ async function ensureCsrfToken() {
 }
 
 export async function apiFetch(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  const method = (options.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+  const { timeoutMs: requestedTimeout, signal: externalSignal, skipCsrf = false, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers || {});
+  const method = (fetchOptions.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && !skipCsrf) {
     headers.set("X-CSRF-Token", await ensureCsrfToken());
   }
-
-  const { timeoutMs: requestedTimeout, signal: externalSignal, ...fetchOptions } = options;
   const timeoutMs = requestedTimeout ?? (fetchOptions.body instanceof FormData ? 60_000 : 15_000);
   const requestUrl = /^https?:\/\//i.test(path) ? path : `${API_URL}${path}`;
 
