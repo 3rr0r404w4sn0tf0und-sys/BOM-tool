@@ -10,6 +10,9 @@ CREATE TABLE users (
     email_verified BOOLEAN NOT NULL DEFAULT false,
     verification_token TEXT,
     verification_token_expires TIMESTAMPTZ,
+    pending_email TEXT,
+    email_change_token TEXT,
+    email_change_token_expires TIMESTAMPTZ,
     oauth_provider TEXT,
     oauth_id TEXT,
     apify_token_encrypted TEXT, -- user's own Apify API token (AES-256-GCM), lets them scrape on their own account instead of the shared one
@@ -101,5 +104,7 @@ CREATE INDEX idx_items_section_id ON items(section_id);
 CREATE INDEX idx_boms_user_id ON boms(user_id);
 CREATE UNIQUE INDEX idx_boms_api_key_hash ON boms(public_api_key_hash) WHERE public_api_key_hash IS NOT NULL;
 CREATE INDEX idx_items_active_scrape_job ON items(scrape_job_id) WHERE scrape_job_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_users_pending_email ON users(pending_email) WHERE pending_email IS NOT NULL;
+CREATE INDEX idx_users_email_change_token ON users(email_change_token) WHERE email_change_token IS NOT NULL;
 CREATE UNIQUE INDEX idx_users_oauth ON users(oauth_provider, oauth_id) WHERE oauth_provider IS NOT NULL;
 CREATE INDEX idx_boms_doc_type ON boms(user_id, doc_type);

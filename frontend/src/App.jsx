@@ -20,6 +20,16 @@ import AccountSettings from "./AccountSettings.jsx";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
 
+function validatePassword(password) {
+  if (typeof password !== "string" || password.length < 8) return "Password must be at least 8 characters";
+  if (new TextEncoder().encode(password).length > 72) return "Password must be 72 bytes or fewer (UTF-8)";
+  if ((password.match(/[A-Z]/g) || []).length < 2) return "Password must contain at least 2 uppercase letters";
+  if ((password.match(/[a-z]/g) || []).length < 2) return "Password must contain at least 2 lowercase letters";
+  if ((password.match(/[0-9]/g) || []).length < 2) return "Password must contain at least 2 numbers";
+  if ((password.match(/[^A-Za-z0-9\s]/g) || []).length < 2) return "Password must contain at least 2 symbols";
+  return null;
+}
+
 // This is a minimal scaffold, not the full editor yet. It proves the
 // API round-trip (login -> create BOM -> fetch totals) so the rest of
 // the UI (rich text rows, emoji section titles, drag to reorder, etc.)
@@ -41,6 +51,7 @@ export default function App() {
   const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
   const [onboardingToken, setOnboardingToken] = useState(() => { try { return sessionStorage.getItem("bom-onboarding-token"); } catch { return null; } });
   const [accountSettings, setAccountSettings] = useState(false);
+  const [emailChangeMessage, setEmailChangeMessage] = useState(null);
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -389,6 +400,11 @@ export default function App() {
 
   // On load, ask the API whether the HttpOnly session cookie is still valid.
   useEffect(() => {
+    const hasEmailChangeToken = new URLSearchParams(window.location.search).has("email_change_token");
+    if (hasEmailChangeToken) {
+      setAuthChecking(false);
+      return;
+    }
     let cancelled = false;
     apiFetch(`${API_URL}/api/auth/me`)
       .then((r) => {
@@ -415,6 +431,40 @@ export default function App() {
         if (!cancelled) setAuthChecking(false);
       });
     return () => { cancelled = true; };
+  }, []);
+
+  // Email-change links are single-use and revoke all sessions after success.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("email_change_token");
+    if (!token) return;
+    apiFetch(`${API_URL}/api/auth/email/verify-change`, {
+      method: "POST",
+      skipCsrf: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Email change failed.");
+        return data;
+      })
+      .then(() => {
+        setToken(null);
+        setUser(null);
+        setBom(null);
+        setBomList(null);
+        setAccountSettings(false);
+        setMode("login");
+        setAuthError(null);
+        setEmailChangeMessage("Email address changed successfully. Please log in again.");
+        window.history.replaceState({}, "", "/login");
+      })
+      .catch((e) => {
+        setMode("login");
+        setAuthError(e.message || "Email change failed.");
+        window.history.replaceState({}, "", "/login");
+      });
   }, []);
 
   // Email verification links land directly on /finish. The raw verification
@@ -481,8 +531,11 @@ export default function App() {
 
   function clientValidate() {
     if (!EMAIL_RE.test(email.trim())) return "Enter a valid email address";
-    if (password.length < 8) return "Password must be at least 8 characters";
-    if (mode === "register" && password !== confirmPassword) return "Passwords don't match";
+    if (mode === "register") {
+      const passwordError = validatePassword(password);
+      if (passwordError) return passwordError;
+      if (password !== confirmPassword) return "Passwords don't match";
+    }
     return null;
   }
 
@@ -1055,12 +1108,17 @@ export default function App() {
                 style={{ width: "100%", padding: 10, marginBottom: 8, boxSizing: "border-box", border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 14, background: theme.bg, color: theme.text }}
               />
               <input
-                placeholder="password (min 12 characters)"
+                placeholder="password (8+ chars, 2 of each type)"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={{ width: "100%", padding: 10, marginBottom: 8, boxSizing: "border-box", border: `1px solid ${theme.border}`, borderRadius: 8, fontSize: 14, background: theme.bg, color: theme.text }}
               />
+              {mode === "register" && (
+                <p style={{ color: theme.subtleText, fontSize: 12, lineHeight: 1.45, margin: "0 0 8px" }}>
+                  Password must have at least 8 characters, 2 uppercase, 2 lowercase, 2 numbers, and 2 symbols.
+                </p>
+              )}
               {mode === "register" && (
                 <input
                   placeholder="confirm password"
@@ -1090,6 +1148,7 @@ export default function App() {
                 {authLoading ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
               </button>
 
+              {emailChangeMessage && <p style={{ color: theme.okText, fontSize: 13, margin: "0 0 10px" }}>{emailChangeMessage}</p>}
               {authError && (
                 <p style={{ color: theme.errText, fontSize: 13, marginTop: 10 }}>{authError}</p>
               )}
@@ -1106,7 +1165,7 @@ export default function App() {
   }
 
   if (accountSettings) {
-    return <AccountSettings theme={theme} user={user} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/home"); }} onUpdated={(u) => setUser(u)} />;
+    return <AccountSettings theme={theme} user={user} onLogout={logout} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/home"); }} onUpdated={(u) => setUser(u)} />;
   }
 
   return (

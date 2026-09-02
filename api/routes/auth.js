@@ -27,6 +27,40 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "http://localhost:4000";
 const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
 const ONBOARDING_TOKEN_MAX_AGE = "15m";
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_BYTES = 72;
+
+function validatePassword(password) {
+  if (typeof password !== "string") return "Password is required";
+  if (password.length < PASSWORD_MIN_LENGTH) return "Password must be at least 8 characters";
+  if (Buffer.byteLength(password, "utf8") > PASSWORD_MAX_BYTES) return "Password must be 72 bytes or fewer (UTF-8)";
+  const uppercase = (password.match(/[A-Z]/g) || []).length;
+  const lowercase = (password.match(/[a-z]/g) || []).length;
+  const numbers = (password.match(/[0-9]/g) || []).length;
+  const symbols = (password.match(/[^A-Za-z0-9\s]/g) || []).length;
+  if (uppercase < 2) return "Password must contain at least 2 uppercase letters";
+  if (lowercase < 2) return "Password must contain at least 2 lowercase letters";
+  if (numbers < 2) return "Password must contain at least 2 numbers";
+  if (symbols < 2) return "Password must contain at least 2 symbols";
+  return null;
+}
+
+function makeEmailChangeToken() {
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return { token, tokenHash, expires };
+}
+
+async function sendEmailChangeVerification(userId, newEmail) {
+  const { token, tokenHash, expires } = makeEmailChangeToken();
+  await pool.query(
+    "UPDATE users SET pending_email = $1, email_change_token = $2, email_change_token_expires = $3 WHERE id = $4",
+    [newEmail, tokenHash, expires, userId]
+  );
+  const verifyUrl = `${FRONTEND_URL}/settings/account?email_change_token=${encodeURIComponent(token)}`;
+  return sendVerificationEmail(newEmail, verifyUrl);
+}
 
 const OAUTH_STATE_COOKIE = "bom-oauth-state";
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -104,16 +138,8 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
   if (!EMAIL_RE.test(trimmedEmail)) {
     return res.status(400).json({ error: "Enter a valid email address" });
   }
-  if (password.length < 12) {
-    return res.status(400).json({ error: "Password must be at least 12 characters" });
-  }
-  // bcrypt only uses the first 72 bytes of the input -- anything beyond
-  // that is silently ignored, which would let two different long
-  // passwords that share the same first 72 bytes hash identically.
-  // Reject upfront instead of truncating silently.
-  if (Buffer.byteLength(password, "utf8") > 72) {
-    return res.status(400).json({ error: "Password must be 72 bytes or fewer (UTF-8)" });
-  }
+  const passwordError = validatePassword(password);
+  if (passwordError) return res.status(400).json({ error: passwordError });
 
   try {
     const hash = await bcrypt.hash(password, 10);
@@ -227,7 +253,7 @@ authRouter.get("/me", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
   const result = await pool.query(
-    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
+    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token, (password_hash IS NOT NULL) AS has_password FROM users WHERE id = $1",
     [auth.payload.userId]
   );
   const user = result.rows[0];
@@ -260,7 +286,7 @@ authRouter.post("/complete-profile", asyncHandler(async (req, res) => {
     const result = await pool.query(
       `UPDATE users SET username = $1
        WHERE id = $2 AND email_verified = true AND username IS NULL
-       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token`,
+       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token, (password_hash IS NOT NULL) AS has_password`,
       [normalized, payload.userId]
     );
     if (!result.rows[0]) return res.status(409).json({ error: "Account setup has already been completed" });
@@ -277,7 +303,7 @@ authRouter.get("/account", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Missing or invalid session" });
   const result = await pool.query(
-    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token FROM users WHERE id = $1",
+    "SELECT id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token, (password_hash IS NOT NULL) AS has_password FROM users WHERE id = $1",
     [auth.payload.userId]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "User not found" });
@@ -291,7 +317,7 @@ authRouter.patch("/username", requireCsrf, asyncHandler(async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE users SET username = $1 WHERE id = $2
-       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token`,
+       RETURNING id, email, username, email_verified, (apify_token_encrypted IS NOT NULL) AS has_apify_token, (password_hash IS NOT NULL) AS has_password`,
       [username, req.userId]
     );
     res.json({ user: result.rows[0] });
@@ -299,6 +325,147 @@ authRouter.patch("/username", requireCsrf, asyncHandler(async (req, res) => {
     if (e.code === "23505") return res.status(409).json({ error: "That username is already taken", code: "USERNAME_TAKEN" });
     throw e;
   }
+}));
+
+// ---------- Account security ----------
+
+authRouter.patch("/email", requireCsrf, asyncHandler(async (req, res) => {
+  const newEmail = typeof req.body?.email === "string" ? req.body.email.toLowerCase().trim() : "";
+  const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+  if (!EMAIL_RE.test(newEmail)) return res.status(400).json({ error: "Enter a valid email address" });
+
+  const current = await pool.query(
+    "SELECT email, password_hash, email_verified FROM users WHERE id = $1",
+    [req.userId]
+  );
+  const user = current.rows[0];
+  if (!user) return res.status(404).json({ error: "User not found" });
+  if (newEmail === user.email.toLowerCase()) return res.status(400).json({ error: "That is already your email address" });
+
+  if (user.password_hash) {
+    if (!currentPassword || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+  } else {
+    return res.status(400).json({ error: "Set a password before changing the email address" });
+  }
+
+  const existing = await pool.query(
+    "SELECT id FROM users WHERE (email = $1 OR pending_email = $1) AND id <> $2 LIMIT 1",
+    [newEmail, req.userId]
+  );
+  if (existing.rows[0]) return res.status(409).json({ error: "That email address is already registered" });
+
+  const emailResult = await sendEmailChangeVerification(req.userId, newEmail);
+  if (!emailResult.sent) {
+    await pool.query(
+      "UPDATE users SET pending_email = NULL, email_change_token = NULL, email_change_token_expires = NULL WHERE id = $1",
+      [req.userId]
+    );
+    return res.status(503).json({ error: "Could not send the verification email. Please try again later." });
+  }
+  res.json({ pending: true, email: user.email, pendingEmail: newEmail });
+}));
+
+authRouter.post("/email/verify-change", asyncHandler(async (req, res) => {
+  const token = typeof req.body?.token === "string" ? req.body.token : "";
+  if (!token) return res.status(400).json({ error: "token required" });
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT id, pending_email, email_change_token_expires
+       FROM users
+       WHERE email_change_token = $1
+       FOR UPDATE`,
+      [tokenHash]
+    );
+    const user = result.rows[0];
+    if (!user || !user.pending_email) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Invalid or already-used email change link" });
+    }
+    if (!user.email_change_token_expires || new Date(user.email_change_token_expires) < new Date()) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Email change link expired. Request another one." });
+    }
+
+    try {
+      await client.query(
+        `UPDATE users
+         SET email = pending_email,
+             pending_email = NULL,
+             email_change_token = NULL,
+             email_change_token_expires = NULL,
+             email_verified = true
+         WHERE id = $1`,
+        [user.id]
+      );
+    } catch (e) {
+      if (e.code === "23505") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "That email address is already registered" });
+      }
+      throw e;
+    }
+    await client.query("UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [user.id]);
+    await client.query("COMMIT");
+    clearAuthCookie(res);
+    res.json({ emailChanged: true });
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}));
+
+authRouter.post("/password", requireCsrf, asyncHandler(async (req, res) => {
+  const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+  const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+  const passwordError = validatePassword(newPassword);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+
+  const result = await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.userId]);
+  const user = result.rows[0];
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (user.password_hash) {
+    if (!currentPassword || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    if (await bcrypt.compare(newPassword, user.password_hash)) {
+      return res.status(400).json({ error: "New password must be different from your current password" });
+    }
+  }
+
+  const hash = await bcrypt.hash(newPassword, 10);
+  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [hash, req.userId]);
+  await pool.query("UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [req.userId]);
+  clearAuthCookie(res);
+  res.json({ passwordChanged: true, loggedOut: true });
+}));
+
+authRouter.delete("/account", requireCsrf, asyncHandler(async (req, res) => {
+  const confirmation = typeof req.body?.confirmation === "string" ? req.body.confirmation : "";
+  const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+  if (confirmation !== "DELETE") return res.status(400).json({ error: 'Type "DELETE" to confirm account deletion' });
+
+  const result = await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.userId]);
+  const user = result.rows[0];
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (user.password_hash) {
+    if (!currentPassword || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+  }
+
+  await pool.query("DELETE FROM users WHERE id = $1", [req.userId]);
+  clearAuthCookie(res);
+  res.json({ deleted: true });
 }));
 
 // A user's own Apify token, so BOM scrapes run against their Apify account

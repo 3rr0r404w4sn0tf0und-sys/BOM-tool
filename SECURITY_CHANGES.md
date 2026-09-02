@@ -69,3 +69,15 @@ The existing public BOM API-key URLs were intentionally left intact. They are de
 `JWT_SECRET` and `INTERNAL_SCRAPE_SECRET` must be long random secrets.
 
 If the API uses a custom domain instead of `*.onrender.com`, update `frontend/vercel.json` so its CSP `connect-src` includes that API origin.
+
+
+## Account security and password policy
+
+- Passwords require at least 8 characters, including 2 uppercase letters, 2 lowercase letters, 2 numbers, and 2 symbols.
+- bcrypt's 72-byte UTF-8 input limit is enforced.
+- Existing password accounts can change passwords from Account Settings; changing a password revokes all active sessions.
+- OAuth-only accounts can set a password from Account Settings.
+- Email changes require the current password for password accounts and a single-use verification link sent to the new address.
+- Email-change links expire after 24 hours and their tokens are stored as SHA-256 hashes.
+- Successful email changes revoke all active sessions.
+- Account deletion requires typing `DELETE`; password accounts also require the current password. Owned BOMs and account-linked sessions/shares are removed through database foreign-key cascades.
