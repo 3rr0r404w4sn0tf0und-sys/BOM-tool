@@ -262,6 +262,113 @@ function CostCell({ item, theme, onResolved }) {
 // setSections only replaces the one section that actually changed) -- so
 // with a BOM that has many tables, editing one row no longer re-renders
 // every other table on the page.
+
+const BomRow = memo(function BomRow({
+  item, sectionId, isSheet, numCols, columnLabels, theme,
+  dragItemId, dragOverItemId, onRowDragStart, onRowDragOver, onRowDrop,
+  onRowDragEnd, onAddRow, onDeleteRow, onPatchItem, onResolved, setRowMenu,
+}) {
+  const defaultColLabel = (i) => `Row ${String.fromCharCode(65 + i)}`;
+  const cells = Array.isArray(item.sheet_data) ? item.sheet_data : [];
+  const checked = isSheet && item.checked === true;
+
+  return (
+    <tr
+      draggable={false}
+      onDragOver={(e) => onRowDragOver(e, item.id)}
+      onDrop={(e) => onRowDrop(e, item.id)}
+      onDragEnd={onRowDragEnd}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setRowMenu({
+          x: e.clientX,
+          y: e.clientY,
+          items: [
+            { label: "Add row below", icon: IconPlus, onClick: () => onAddRow(sectionId) },
+            { label: "Delete row", icon: IconTrash, onClick: () => onDeleteRow(sectionId, item.id), danger: true },
+          ],
+        });
+      }}
+      style={{
+        borderBottom: `1px solid ${theme.rowBorder}`,
+        background: dragOverItemId === item.id ? theme.rowBorder : "transparent",
+        opacity: dragItemId === item.id ? 0.4 : (checked ? 0.5 : 1),
+      }}
+    >
+      <td style={{ padding: "2px 4px", textAlign: "center" }}>
+        <span
+          draggable
+          onDragStart={(e) => onRowDragStart(e, item.id)}
+          title="Drag to reorder row"
+          style={{ display: "inline-flex", cursor: "grab", color: theme.muted, opacity: 0.5, padding: 4 }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.5)}
+        >
+          <IconGrip size={13} color={theme.muted} />
+        </span>
+      </td>
+      {isSheet ? (
+        <>
+          {Array.from({ length: numCols }).map((_, i) => (
+            <td key={i} style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+              <EditableCell
+                value={cells[i] ?? ""}
+                placeholder={columnLabels?.[i] || defaultColLabel(i)}
+                theme={theme}
+                onCommit={(v) => {
+                  const next = Array.from({ length: numCols }, (_, j) => (j === i ? v : cells[j] ?? ""));
+                  onPatchItem(sectionId, item.id, { sheet_data: next });
+                }}
+              />
+            </td>
+          ))}
+          <td style={{ padding: "2px 6px", textAlign: "center" }}>
+            <input
+              type="checkbox"
+              checked={item.checked === true}
+              onChange={(e) => onPatchItem(sectionId, item.id, { checked: e.target.checked })}
+              style={{ cursor: "pointer", width: 15, height: 15 }}
+            />
+          </td>
+        </>
+      ) : (
+        <>
+          <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+            <EditableCell value={item.url} placeholder="paste a link…" theme={theme} mono
+              onCommit={(v) => onPatchItem(sectionId, item.id, { url: v, status: "pending" })} />
+          </td>
+          <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+            <EditableCell value={item.name} placeholder="item name" theme={theme}
+              onCommit={(v) => onPatchItem(sectionId, item.id, { name: v })} />
+          </td>
+          <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
+            <EditableCell value={String(item.qty ?? 1)} placeholder="1" theme={theme} align="right"
+              onCommit={(v) => {
+                const n = parseInt(v, 10);
+                onPatchItem(sectionId, item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
+              }} />
+          </td>
+          <td style={{ padding: "6px 8px", textAlign: "right" }}>
+            <CostCell item={item} theme={theme} onResolved={onResolved} />
+          </td>
+        </>
+      )}
+      <td style={{ padding: "2px 4px" }}>
+        <button
+          onClick={() => onDeleteRow(sectionId, item.id)}
+          title="Delete row"
+          style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted, opacity: 0.6 }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.6)}
+        >
+          <IconTrash size={13} color={theme.muted} />
+        </button>
+      </td>
+    </tr>
+  );
+});
+
 function SectionTable({
   section,
   theme,
@@ -363,6 +470,7 @@ function SectionTable({
   return (
     <div
       {...sectionDropProps}
+      className="bom-section-surface bom-glass"
       style={{
         background: theme.cardBg,
         border: `1px solid ${isSectionDragOver ? theme.accent : theme.border}`,
@@ -436,7 +544,7 @@ function SectionTable({
         </button>
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+      <table className="bom-section-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <thead>
           {isSheet ? (
             <tr>
@@ -487,117 +595,26 @@ function SectionTable({
         </thead>
         <tbody>
           {section.items.map((item) => (
-            <tr
+            <BomRow
               key={item.id}
-              draggable={false}
-              onDragOver={(e) => onRowDragOver(e, item.id)}
-              onDrop={(e) => onRowDrop(e, item.id)}
-              onDragEnd={() => { setDragItemId(null); setDragOverItemId(null); }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setRowMenu({
-                  x: e.clientX,
-                  y: e.clientY,
-                  items: [
-                    { label: "Add row below", icon: IconPlus, onClick: () => onAddRow(section.id) },
-                    { label: "Delete row", icon: IconTrash, onClick: () => onDeleteRow(section.id, item.id), danger: true },
-                  ],
-                });
-              }}
-              style={{
-                borderBottom: `1px solid ${theme.rowBorder}`,
-                background: dragOverItemId === item.id ? theme.rowBorder : "transparent",
-                opacity: dragItemId === item.id ? 0.4 : (isSheet && item.checked === true ? 0.5 : 1),
-              }}
-            >
-              <td style={{ padding: "2px 4px", textAlign: "center" }}>
-                <span
-                  draggable
-                  onDragStart={(e) => onRowDragStart(e, item.id)}
-                  title="Drag to reorder row"
-                  style={{ display: "inline-flex", cursor: "grab", color: theme.muted, opacity: 0.5, padding: 4 }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.5)}
-                >
-                  <IconGrip size={13} color={theme.muted} />
-                </span>
-              </td>
-              {isSheet ? (
-                <>
-                  {Array.from({ length: numCols }).map((_, i) => {
-                    const cells = Array.isArray(item.sheet_data) ? item.sheet_data : [];
-                    return (
-                      <td key={i} style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                        <EditableCell
-                          value={cells[i] ?? ""}
-                          placeholder={columnLabels?.[i] || defaultColLabel(i)}
-                          theme={theme}
-                          onCommit={(v) => {
-                            const next = Array.from({ length: numCols }, (_, j) => (j === i ? v : cells[j] ?? ""));
-                            onPatchItem(section.id, item.id, { sheet_data: next });
-                          }}
-                        />
-                      </td>
-                    );
-                  })}
-                  <td style={{ padding: "2px 6px", textAlign: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={item.checked === true}
-                      onChange={(e) => onPatchItem(section.id, item.id, { checked: e.target.checked })}
-                      style={{ cursor: "pointer", width: 15, height: 15 }}
-                    />
-                  </td>
-                </>
-              ) : (
-                <>
-                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                    <EditableCell
-                      value={item.url}
-                      placeholder="paste a link…"
-                      theme={theme}
-                      mono
-                      onCommit={(v) => onPatchItem(section.id, item.id, { url: v, status: "pending" })}
-                    />
-                  </td>
-                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                    <EditableCell
-                      value={item.name}
-                      placeholder="item name"
-                      theme={theme}
-                      onCommit={(v) => onPatchItem(section.id, item.id, { name: v })}
-                    />
-                  </td>
-                  <td style={{ padding: "2px 6px", maxWidth: 0, overflow: "hidden" }}>
-                    <EditableCell
-                      value={String(item.qty ?? 1)}
-                      placeholder="1"
-                      theme={theme}
-                      align="right"
-                      onCommit={(v) => {
-                        const n = parseInt(v, 10);
-                        onPatchItem(section.id, item.id, { qty: Number.isFinite(n) && n > 0 ? n : 1 });
-                      }}
-                    />
-                  </td>
-                  <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                    <CostCell item={item} theme={theme} onResolved={onResolved} />
-                  </td>
-                </>
-              )}
-              <td style={{ padding: "2px 4px" }}>
-                <button
-                  onClick={() => onDeleteRow(section.id, item.id)}
-                  title="Delete row"
-                  style={{ border: "none", background: "none", cursor: "pointer", padding: 4, display: "flex", color: theme.muted, opacity: 0.6 }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.6)}
-                >
-                  <IconTrash size={13} color={theme.muted} />
-                </button>
-              </td>
-            </tr>
+              item={item}
+              sectionId={section.id}
+              isSheet={isSheet}
+              numCols={numCols}
+              columnLabels={columnLabels}
+              theme={theme}
+              dragItemId={dragItemId}
+              dragOverItemId={dragOverItemId}
+              onRowDragStart={onRowDragStart}
+              onRowDragOver={onRowDragOver}
+              onRowDrop={onRowDrop}
+              onRowDragEnd={() => { setDragItemId(null); setDragOverItemId(null); }}
+              onAddRow={onAddRow}
+              onDeleteRow={onDeleteRow}
+              onPatchItem={onPatchItem}
+              onResolved={onResolved}
+              setRowMenu={setRowMenu}
+            />
           ))}
         </tbody>
       </table>

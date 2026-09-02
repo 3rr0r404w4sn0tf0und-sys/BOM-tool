@@ -81,6 +81,19 @@ export default function App() {
   const theme = getTheme(themeName);
   const history = useUndoRedo();
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeName;
+    document.documentElement.style.setProperty("--bom-accent", theme.accent);
+    document.documentElement.style.setProperty("--bom-text", theme.text);
+    document.documentElement.style.setProperty("--bom-muted", theme.muted);
+    return () => {
+      delete document.documentElement.dataset.theme;
+      document.documentElement.style.removeProperty("--bom-accent");
+      document.documentElement.style.removeProperty("--bom-text");
+      document.documentElement.style.removeProperty("--bom-muted");
+    };
+  }, [themeName, theme]);
+
   // Stable live reference used by mutation callbacks so they can avoid
   // closing over the whole BOM object and forcing every table to re-render.
   const bomRef = useRef(bom);
@@ -943,7 +956,7 @@ export default function App() {
     minHeight: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: theme.pageBg || theme.bg,
+    background: "transparent",
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
     position: "relative",
     zIndex: 1,
@@ -1205,71 +1218,7 @@ export default function App() {
           />
         </div>
 
-        <style>{`
-          @keyframes bom-spin { to { transform: rotate(360deg); } }
-          @keyframes bom-view-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-          @keyframes bom-ambient-drift {
-            0%, 100% { transform: translate3d(-8%, -4%, 0) scale(1); }
-            25% { transform: translate3d(18%, 8%, 0) scale(1.12); }
-            50% { transform: translate3d(6%, 24%, 0) scale(.96); }
-            75% { transform: translate3d(-22%, 10%, 0) scale(1.08); }
-          }
-          @keyframes bom-ambient-drift-reverse {
-            0%, 100% { transform: translate3d(18%, 12%, 0) scale(1.08); opacity: .78; }
-            33% { transform: translate3d(-12%, -10%, 0) scale(.92); opacity: .92; }
-            66% { transform: translate3d(-24%, 20%, 0) scale(1.14); opacity: .70; }
-          }
-          @keyframes bom-ambient-end-flash {
-            0%, 82%, 100% { opacity: .72; }
-            86% { opacity: 1; }
-            88% { opacity: .58; }
-            90% { opacity: .86; }
-          }
-          body::before, body::after {
-            content: "";
-            position: fixed;
-            inset: -28%;
-            pointer-events: none;
-            z-index: 0;
-            will-change: transform;
-          }
-          body::before {
-            background:
-              radial-gradient(circle at 22% 24%, rgba(59,130,246,.22) 0, rgba(59,130,246,.10) 11%, transparent 28%),
-              radial-gradient(circle at 74% 30%, rgba(139,92,246,.16) 0, rgba(139,92,246,.07) 12%, transparent 29%),
-              radial-gradient(circle at 52% 76%, rgba(20,184,166,.12) 0, rgba(20,184,166,.05) 11%, transparent 27%);
-            filter: blur(34px);
-            animation: bom-ambient-drift 24s ease-in-out infinite;
-            opacity: ${themeName === "dark" ? 1 : .72};
-          }
-          body::after {
-            background:
-              radial-gradient(circle at 80% 72%, rgba(236,72,153,.13) 0, rgba(236,72,153,.05) 10%, transparent 26%),
-              radial-gradient(circle at 34% 64%, rgba(245,158,11,.10) 0, rgba(245,158,11,.04) 9%, transparent 24%),
-              radial-gradient(circle at 58% 20%, rgba(99,102,241,.12) 0, rgba(99,102,241,.04) 12%, transparent 27%);
-            filter: blur(42px);
-            animation: ${themeName === "dark" ? "bom-ambient-end-flash 9s ease-in-out infinite, bom-ambient-drift-reverse 31s ease-in-out infinite" : "bom-ambient-drift-reverse 31s ease-in-out infinite"};
-            opacity: ${themeName === "dark" ? .82 : .62};
-          }
-          ${themeName === "dark" ? `` : `
-          body::before, body::after { mix-blend-mode: multiply; }
-          `}
-          .bom-view-enter { animation: bom-view-enter 220ms ease-out; }
-          * { box-sizing: border-box; }
-          ::selection { background: ${theme.accent}55; color: ${theme.text}; }
-          body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-          button, input, textarea, select { font: inherit; }
-          button { transition: transform 140ms ease, box-shadow 160ms ease, border-color 160ms ease, background 160ms ease, opacity 160ms ease; }
-          button:not(:disabled):hover { filter: brightness(1.035); }
-          button:not(:disabled):active { transform: translateY(1px); }
-          input, textarea, select { transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease; }
-          input:focus, textarea:focus, select:focus { outline: none; border-color: ${theme.accent} !important; box-shadow: 0 0 0 3px ${theme.accent}22 !important; }
-          ::-webkit-scrollbar { width: 10px; height: 10px; }
-          ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { background: ${theme.border}; border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
-          ::-webkit-scrollbar-thumb:hover { background: ${theme.muted}; background-clip: padding-box; }
-          .bom-glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
-        `}</style>
+
 
         {user && !user.email_verified && (
           <div style={{ background: theme.warnBg, color: theme.warnText, padding: "10px 14px", borderRadius: 10, marginBottom: 20, fontSize: 13.5, display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -1385,7 +1334,7 @@ export default function App() {
             )}
 
             {!bomListLoading && bomList && bomList.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="bom-list-stagger" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {bomList.map((b) => (
                   <div
                     key={b.id}
