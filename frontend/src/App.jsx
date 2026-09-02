@@ -8,7 +8,8 @@ import SectionTable from "./SectionTable.jsx";
 import WakingUp from "./WakingUp.jsx";
 import ApiModal from "./ApiModal.jsx";
 import ApifyKeyModal from "./ApifyKeyModal.jsx";
-import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh } from "./Icons.jsx";
+import ShareModal from "./ShareModal.jsx";
+import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh, IconShare } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
 import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
@@ -52,6 +53,8 @@ export default function App() {
   const [titleDraft, setTitleDraft] = useState("");
   const [showApiModal, setShowApiModal] = useState(false);
   const [showApifyKeyModal, setShowApifyKeyModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [accessDeniedNotice, setAccessDeniedNotice] = useState(null);
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
   const [sheetImportJustSucceeded, setSheetImportJustSucceeded] = useState(false);
@@ -572,16 +575,23 @@ export default function App() {
         headers: { },
       });
       if (!res.ok) {
-        let message = `Failed to load BOM (${res.status})`;
+        // 404 covers both "doesn't exist" and "exists but you have no
+        // access" -- deliberately not distinguished, so a bad guess at
+        // someone else's BOM id can't be used to confirm it's real.
+        let message = res.status === 404
+          ? "You don't have access to this BOM, or it doesn't exist."
+          : `Failed to load BOM (${res.status})`;
         try {
           const body = await res.json();
-          if (body?.error) message = body.error;
+          if (body?.error && res.status !== 404) message = body.error;
         } catch {
           // response wasn't JSON (e.g. a raw 500/502 HTML page) -- fall
           // back to the generic status-based message above
         }
+        setAccessDeniedNotice(res.status === 404 ? message : null);
         throw new Error(message);
       }
+      setAccessDeniedNotice(null);
       setBom(await res.json());
     } catch (e) {
       console.error("loadBom failed:", e);
@@ -1157,12 +1167,22 @@ export default function App() {
                 }}
               >
                 <span>{bomLoadError}</span>
-                <button
-                  onClick={() => setBomLoadError(null)}
-                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-                >
-                  Dismiss
-                </button>
+                <div style={{ display: "flex", gap: 12, flexShrink: 0 }}>
+                  {accessDeniedNotice && (
+                    <button
+                      onClick={logout}
+                      style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                    >
+                      Log in as someone else
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setBomLoadError(null); setAccessDeniedNotice(null); }}
+                    style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1235,7 +1255,19 @@ export default function App() {
                         <IconFolder size={16} color={theme.muted} />
                       )}
                       {b.title}
+                      {b.role && b.role !== "owner" && (
+                        <span
+                          style={{
+                            fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+                            color: theme.muted, border: `1px solid ${theme.border}`, borderRadius: 5,
+                            padding: "1px 6px", flexShrink: 0,
+                          }}
+                        >
+                          Shared · {b.role}
+                        </span>
+                      )}
                     </button>
+                    {b.role === "owner" && (
                     <button
                       onClick={() => deleteBom(b.id)}
                       title="Delete BOM"
@@ -1243,6 +1275,7 @@ export default function App() {
                     >
                       <IconTrash size={14} color={theme.muted} />
                     </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1265,7 +1298,7 @@ export default function App() {
                 <IconArrowLeft size={14} color={theme.text} />
               </button>
 
-              {titleEditing ? (
+              {titleEditing && bom.role !== "viewer" ? (
                 <input
                   autoFocus
                   value={titleDraft}
@@ -1277,7 +1310,7 @@ export default function App() {
                     padding: "4px 8px", background: theme.cardBg, color: theme.text, minWidth: 0, flex: 1,
                   }}
                 />
-              ) : (
+              ) : bom.role !== "viewer" ? (
                 <button
                   onClick={() => { setTitleDraft(bom.title); setTitleEditing(true); }}
                   title="Rename BOM"
@@ -1289,11 +1322,40 @@ export default function App() {
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bom.title}</span>
                   <IconPencil size={12} color={theme.muted} />
                 </button>
+              ) : (
+                <span style={{ fontSize: 18, fontWeight: 700, color: theme.text, padding: "4px 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {bom.title}
+                </span>
               )}
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-              {bom.doc_type !== "sheet" && (
+              {bom.role === "owner" && (
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  title="Share this BOM"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  <IconShare size={13} /> Share
+                </button>
+              )}
+              {bom.role && bom.role !== "owner" && (
+                <span
+                  title={bom.role === "viewer" ? "You can view this BOM but not edit it" : "You can edit this BOM's content, but not sharing or deletion"}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "7px 12px", border: `1px solid ${theme.border}`, borderRadius: 8,
+                    background: theme.bg, color: theme.muted, fontSize: 12.5, fontWeight: 600,
+                  }}
+                >
+                  {bom.role === "viewer" ? "Viewing (read-only)" : "Editing (shared)"}
+                </span>
+              )}
+              {bom.doc_type !== "sheet" && bom.role === "owner" && (
                 <button
                   onClick={() => setShowApiModal(true)}
                   title="API access"
@@ -1313,7 +1375,8 @@ export default function App() {
                 onChange={importSheet}
                 style={{ display: "none" }}
               />
-              {bom.doc_type !== "sheet" && <RefreshMenu theme={theme} refreshingFilter={refreshingFilter} onSelect={refreshItems} />}
+              {bom.doc_type !== "sheet" && bom.role !== "viewer" && <RefreshMenu theme={theme} refreshingFilter={refreshingFilter} onSelect={refreshItems} />}
+              {bom.role !== "viewer" && (
               <button
                 onClick={triggerSheetUpload}
                 disabled={sheetImporting}
@@ -1327,6 +1390,7 @@ export default function App() {
               >
                 <IconUpload size={13} /> {sheetImporting ? "Importing…" : bom.doc_type === "sheet" ? "Import Sheet (Doc)" : "Import Sheet (BOM)"}
               </button>
+              )}
               <button
                 onClick={exportSheet}
                 disabled={sheetExporting}
@@ -1340,6 +1404,7 @@ export default function App() {
               >
                 <IconDownload size={13} /> {sheetExporting ? "Exporting…" : "Export Sheet"}
               </button>
+              {bom.role !== "viewer" && (
               <button
                 onClick={addTable}
                 style={{
@@ -1350,6 +1415,8 @@ export default function App() {
               >
                 <IconPlus size={13} /> Add table
               </button>
+              )}
+              {bom.role !== "viewer" && (
               <span style={{ display: "inline-flex", marginLeft: "auto", gap: 4 }}>
                 <button
                   onClick={history.undo}
@@ -1372,6 +1439,7 @@ export default function App() {
                   ↷ Redo
                 </button>
               </span>
+              )}
             </div>
 
             {sheetImportError && (
@@ -1399,6 +1467,14 @@ export default function App() {
                     prev ? prev.map((b) => (b.id === updated.id ? { ...b, public_api_key: updated.public_api_key } : b)) : prev
                   );
                 }}
+              />
+            )}
+
+            {showShareModal && bom.role === "owner" && (
+              <ShareModal
+                bom={bom}
+                theme={theme}
+                onClose={() => setShowShareModal(false)}
               />
             )}
 
@@ -1433,31 +1509,39 @@ export default function App() {
               </p>
             )}
 
-            {bom.sections.map((section) => (
-              <SectionTable
-                key={section.id}
-                section={section}
-                theme={theme}
-                docType={bom.doc_type}
-                columnCount={bom.column_count}
-                columnLabels={bom.column_labels}
-                onSetColumnCount={setColumnCount}
-                onRenameColumn={renameColumn}
-                onResolved={onItemResolved}
-                onAddRow={addRow}
-                onDeleteRow={deleteRow}
-                onPatchItem={patchItem}
-                onReorderItems={reorderItems}
-                onRenameSection={renameSection}
-                onChangeEmoji={setSectionEmoji}
-                onDeleteTable={deleteTable}
-                isSectionDragOver={dragOverSectionId === section.id}
-                onSectionDragStart={onSectionDragStart}
-                onSectionDragOver={onSectionDragOver}
-                onSectionDrop={onSectionDrop}
-                onSectionDragEnd={onSectionDragEnd}
-              />
-            ))}
+            {/* Viewers get a live BOM with every inline control still
+                visible (SectionTable isn't role-aware internally), but
+                pointer-events is switched off for the whole table region
+                so nothing is actually clickable/editable. The backend
+                rejects any mutation from a viewer regardless -- this is
+                just to stop the UI from *looking* editable when it isn't. */}
+            <div style={bom.role === "viewer" ? { pointerEvents: "none", opacity: 0.92 } : undefined}>
+              {bom.sections.map((section) => (
+                <SectionTable
+                  key={section.id}
+                  section={section}
+                  theme={theme}
+                  docType={bom.doc_type}
+                  columnCount={bom.column_count}
+                  columnLabels={bom.column_labels}
+                  onSetColumnCount={setColumnCount}
+                  onRenameColumn={renameColumn}
+                  onResolved={onItemResolved}
+                  onAddRow={addRow}
+                  onDeleteRow={deleteRow}
+                  onPatchItem={patchItem}
+                  onReorderItems={reorderItems}
+                  onRenameSection={renameSection}
+                  onChangeEmoji={setSectionEmoji}
+                  onDeleteTable={deleteTable}
+                  isSectionDragOver={dragOverSectionId === section.id}
+                  onSectionDragStart={onSectionDragStart}
+                  onSectionDragOver={onSectionDragOver}
+                  onSectionDrop={onSectionDrop}
+                  onSectionDragEnd={onSectionDragEnd}
+                />
+              ))}
+            </div>
 
             {bom.doc_type !== "sheet" && (
             <div
@@ -1479,7 +1563,7 @@ export default function App() {
                 <span>${bom.totals.subtotal.toFixed(2)}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13.5, color: theme.subtleText }}>
-                {taxRateEditing ? (
+                {taxRateEditing && bom.role !== "viewer" ? (
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <span>Tax</span>
                     <input
@@ -1502,7 +1586,7 @@ export default function App() {
                     />
                     <span>%</span>
                   </span>
-                ) : (
+                ) : bom.role !== "viewer" ? (
                   <button
                     onClick={() => {
                       setTaxRateDraft(String(Math.round(Number(bom.tax_rate) * 10000) / 100));
@@ -1520,6 +1604,8 @@ export default function App() {
                     Tax ({(Number(bom.tax_rate) * 100).toFixed(2)}%)
                     <IconPencil size={10} color={theme.muted} />
                   </button>
+                ) : (
+                  <span>Tax ({(Number(bom.tax_rate) * 100).toFixed(2)}%)</span>
                 )}
                 <span>${bom.totals.tax.toFixed(2)}</span>
               </span>

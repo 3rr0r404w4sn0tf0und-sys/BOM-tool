@@ -12,6 +12,7 @@ import { optionalString, optionalNumber, optionalBoolean, optionalEnum, optional
 import { validateProductUrl } from "../lib/urlValidation.js";
 import { triggerScrape, triggerBatchScrape } from "../lib/scrapeDispatcher.js";
 import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+import { getBomRole, resolveSectionBomId, resolveItemBomId, normalizeEmail } from "../lib/access.js";
 import rateLimit from "express-rate-limit";
 
 // public_api_key is never stored raw -- see migrations/012_hashed_api_keys.sql.
@@ -37,37 +38,36 @@ bomsRouter.use(requireAuth);
 bomsRouter.use(requireCsrf);
 
 // Resource-level authorization helpers. UUIDs are identifiers, not secrets:
-// every mutation/read of a child resource must still prove that its BOM
-// belongs to the authenticated user.
-export async function userOwnsBom(bomId, userId) {
-  const result = await pool.query(
-    "SELECT id FROM boms WHERE id = $1 AND user_id = $2",
-    [bomId, userId]
-  );
-  return !!result.rows[0];
+// every mutation/read of a child resource must still prove the caller has
+// at least `minRole` (viewer/editor/owner) on the BOM that owns it --
+// either as the outright owner, an accepted/pending share, or the BOM's
+// public-link setting. See lib/access.js for the resolution order.
+//
+// Each helper returns the row (with role attached) on success, or null,
+// so callsites keep their existing `if (!await getOwned...(...))` shape.
+export async function userOwnsBom(bomId, userId, minRole = "editor") {
+  const role = await getBomRole(bomId, userId);
+  if (!role || (RANK(role) < RANK(minRole))) return false;
+  return true;
+}
+function RANK(role) {
+  return { viewer: 1, editor: 2, owner: 3 }[role] || 0;
 }
 
-export async function getOwnedSection(sectionId, userId) {
-  const result = await pool.query(
-    `SELECT sections.id, sections.bom_id
-     FROM sections
-     JOIN boms ON boms.id = sections.bom_id
-     WHERE sections.id = $1 AND boms.user_id = $2`,
-    [sectionId, userId]
-  );
-  return result.rows[0] || null;
+export async function getOwnedSection(sectionId, userId, minRole = "editor") {
+  const bomId = await resolveSectionBomId(sectionId);
+  if (!bomId) return null;
+  const role = await getBomRole(bomId, userId);
+  if (!role || RANK(role) < RANK(minRole)) return null;
+  return { id: sectionId, bom_id: bomId, role };
 }
 
-export async function getOwnedItem(itemId, userId) {
-  const result = await pool.query(
-    `SELECT items.id, items.section_id, sections.bom_id
-     FROM items
-     JOIN sections ON sections.id = items.section_id
-     JOIN boms ON boms.id = sections.bom_id
-     WHERE items.id = $1 AND boms.user_id = $2`,
-    [itemId, userId]
-  );
-  return result.rows[0] || null;
+export async function getOwnedItem(itemId, userId, minRole = "editor") {
+  const bomId = await resolveItemBomId(itemId);
+  if (!bomId) return null;
+  const role = await getBomRole(bomId, userId);
+  if (!role || RANK(role) < RANK(minRole)) return null;
+  return { id: itemId, bom_id: bomId, role };
 }
 
 // Sheet imports (.xlsx / .xls / .csv) — kept small, this isn't for
@@ -114,19 +114,32 @@ bomsRouter.post("/", asyncHandler(async (req, res) => {
 }));
 
 bomsRouter.get("/", asyncHandler(async (req, res) => {
+  // Owned BOMs plus anything shared with this account (by user_id, or by
+  // email for invites sent before they had one) -- role is exposed so the
+  // frontend can gray out edit affordances for viewers.
   const result = await pool.query(
-    "SELECT * FROM boms WHERE user_id = $1 ORDER BY updated_at DESC",
+    `SELECT boms.*, 'owner' AS role
+       FROM boms WHERE boms.user_id = $1
+     UNION ALL
+     SELECT boms.*, bom_shares.role
+       FROM boms
+       JOIN bom_shares ON bom_shares.bom_id = boms.id
+       WHERE boms.user_id <> $1
+         AND (bom_shares.user_id = $1
+              OR bom_shares.email = (SELECT lower(email) FROM users WHERE id = $1))
+     ORDER BY updated_at DESC`,
     [req.userId]
   );
   res.json(result.rows.map(({ public_api_key_hash, public_api_key_encrypted, ...b }) => b));
 }));
 
-// Full BOM with sections + items + calculated totals
+// Full BOM with sections + items + calculated totals. Viewers and editors
+// (not just the owner) can load it; the role is echoed back so the UI can
+// hide mutation controls for viewers.
 bomsRouter.get("/:id", asyncHandler(async (req, res) => {
-  const bomResult = await pool.query(
-    "SELECT * FROM boms WHERE id = $1 AND user_id = $2",
-    [req.params.id, req.userId]
-  );
+  const role = await getBomRole(req.params.id, req.userId);
+  if (!role) return res.status(404).json({ error: "BOM not found" });
+  const bomResult = await pool.query("SELECT * FROM boms WHERE id = $1", [req.params.id]);
   const bom = bomResult.rows[0];
   if (!bom) return res.status(404).json({ error: "BOM not found" });
 
@@ -165,11 +178,15 @@ bomsRouter.get("/:id", asyncHandler(async (req, res) => {
   const totals = calculateTotals(allItems, bom.tax_rate);
 
   // Decrypt for display -- see hashApiKey()/generateApiKey() comment
-  // above for why this isn't the raw DB column anymore.
-  const publicApiKey = bom.public_api_key_encrypted ? decryptSecret(bom.public_api_key_encrypted) : null;
+  // above for why this isn't the raw DB column anymore. The integration
+  // key is scoped to the owner only: it's a credential, not BOM content,
+  // so a viewer/editor share should never be able to read or rotate it.
+  const publicApiKey = role === "owner" && bom.public_api_key_encrypted
+    ? decryptSecret(bom.public_api_key_encrypted)
+    : null;
   const { public_api_key_hash, public_api_key_encrypted, ...bomSafe } = bom;
 
-  res.json({ ...bomSafe, public_api_key: publicApiKey, sections: sectionsWithItems, totals });
+  res.json({ ...bomSafe, public_api_key: publicApiKey, role, sections: sectionsWithItems, totals });
 }));
 
 bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
@@ -179,10 +196,13 @@ bomsRouter.patch("/:id", asyncHandler(async (req, res) => {
   if (tax_rate === null && req.body?.tax_rate !== undefined && req.body?.tax_rate !== null && req.body?.tax_rate !== "") return;
   const doc_type = validateBody(() => optionalEnum(req.body?.doc_type, "doc_type", ["bom", "sheet"]), res);
   if (res.locals.validationFailed) return;
+  if (!await userOwnsBom(req.params.id, req.userId, "editor")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   const result = await pool.query(
     `UPDATE boms SET title = COALESCE($1, title), tax_rate = COALESCE($2, tax_rate),
-     doc_type = COALESCE($3, doc_type), updated_at = now() WHERE id = $4 AND user_id = $5 RETURNING *`,
-    [title, tax_rate, doc_type, req.params.id, req.userId]
+     doc_type = COALESCE($3, doc_type), updated_at = now() WHERE id = $4 RETURNING *`,
+    [title, tax_rate, doc_type, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
   res.json(result.rows[0]);
@@ -203,12 +223,15 @@ bomsRouter.patch("/:id/columns", asyncHandler(async (req, res) => {
     return req.body.column_labels.map((l) => optionalString(l, "column_labels[]", 60) || "");
   }, res);
   if (res.locals.validationFailed) return;
+  if (!await userOwnsBom(req.params.id, req.userId, "editor")) {
+    return res.status(404).json({ error: "Sheet not found" });
+  }
   const result = await pool.query(
     `UPDATE boms SET column_count = $1,
        column_labels = CASE WHEN $2::text[] IS NOT NULL THEN $2 ELSE column_labels END,
        updated_at = now()
-     WHERE id = $3 AND user_id = $4 AND doc_type = 'sheet' RETURNING *`,
-    [column_count, column_labels === undefined ? null : column_labels, req.params.id, req.userId]
+     WHERE id = $3 AND doc_type = 'sheet' RETURNING *`,
+    [column_count, column_labels === undefined ? null : column_labels, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Sheet not found" });
   res.json(result.rows[0]);
@@ -218,12 +241,18 @@ bomsRouter.patch("/:id/columns", asyncHandler(async (req, res) => {
 // place (not just soft-invalidated), so as soon as this commits the old
 // key stops matching any row in Neon and every embed/integration using it
 // starts getting 401s until they're updated with the new one.
+// Key management, sharing, and deletion are owner-only -- editors can
+// change BOM content but not who else can get in or the integration
+// credential.
 bomsRouter.post("/:id/regenerate-key", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   const newKey = generateApiKey();
   const result = await pool.query(
     `UPDATE boms SET public_api_key_hash = $1, public_api_key_encrypted = $2, updated_at = now()
-     WHERE id = $3 AND user_id = $4 RETURNING *`,
-    [newKey.hash, newKey.encrypted, req.params.id, req.userId]
+     WHERE id = $3 RETURNING *`,
+    [newKey.hash, newKey.encrypted, req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
   const { public_api_key_hash, public_api_key_encrypted, ...bomSafe } = result.rows[0];
@@ -231,21 +260,129 @@ bomsRouter.post("/:id/regenerate-key", asyncHandler(async (req, res) => {
 }));
 
 bomsRouter.delete("/:id/public-api-key", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   const result = await pool.query(
     `UPDATE boms SET public_api_key_hash = NULL, public_api_key_encrypted = NULL, public_api_key_last_used_at = NULL, updated_at = now()
-     WHERE id = $1 AND user_id = $2 RETURNING id`,
-    [req.params.id, req.userId]
+     WHERE id = $1 RETURNING id`,
+    [req.params.id]
   );
   if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
   res.status(204).send();
 }));
 
 bomsRouter.delete("/:id", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   await pool.query("DELETE FROM boms WHERE id = $1 AND user_id = $2", [
     req.params.id,
     req.userId,
   ]);
   res.status(204).send();
+}));
+
+// --- Sharing ---
+// All share-management routes are owner-only: editors can change BOM
+// content, but only the owner decides who else gets in or at what level.
+
+const shareInviteLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many share invites. Try again later." },
+});
+
+bomsRouter.get("/:id/shares", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
+  const result = await pool.query(
+    `SELECT bom_shares.id, bom_shares.email, bom_shares.role, bom_shares.created_at, bom_shares.accepted_at,
+            users.email AS account_email
+     FROM bom_shares LEFT JOIN users ON users.id = bom_shares.user_id
+     WHERE bom_shares.bom_id = $1 ORDER BY bom_shares.created_at ASC`,
+    [req.params.id]
+  );
+  const bomResult = await pool.query("SELECT public_access FROM boms WHERE id = $1", [req.params.id]);
+  res.json({ shares: result.rows, public_access: bomResult.rows[0]?.public_access || "private" });
+}));
+
+bomsRouter.post("/:id/shares", shareInviteLimiter, asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
+  const emailRaw = validateBody(() => optionalString(req.body?.email, "email", 320), res);
+  if (res.locals.validationFailed) return;
+  const email = normalizeEmail(emailRaw);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: "A valid email is required" });
+  }
+  const role = validateBody(() => optionalEnum(req.body?.role, "role", ["viewer", "editor"]), res);
+  if (res.locals.validationFailed) return;
+  if (!role) return res.status(400).json({ error: "role must be 'viewer' or 'editor'" });
+
+  // Can't share a BOM with its own owner, and can't invite an already-used
+  // email twice -- upsert the role instead of erroring, so "share again
+  // with a different role" from the UI just works.
+  const ownerResult = await pool.query("SELECT user_id FROM boms WHERE id = $1", [req.params.id]);
+  const ownerCheck = await pool.query("SELECT lower(email) AS email FROM users WHERE id = $1", [ownerResult.rows[0]?.user_id]);
+  if (ownerCheck.rows[0]?.email === email) {
+    return res.status(400).json({ error: "This BOM's owner already has full access" });
+  }
+
+  const matchingUser = await pool.query("SELECT id FROM users WHERE lower(email) = $1", [email]);
+  const result = await pool.query(
+    `INSERT INTO bom_shares (bom_id, email, user_id, role, invited_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (bom_id, email) DO UPDATE SET role = EXCLUDED.role
+     RETURNING id, email, role, created_at, accepted_at`,
+    [req.params.id, email, matchingUser.rows[0]?.id || null, role, req.userId]
+  );
+  res.status(201).json(result.rows[0]);
+}));
+
+bomsRouter.patch("/:id/shares/:shareId", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
+  const role = validateBody(() => optionalEnum(req.body?.role, "role", ["viewer", "editor"]), res);
+  if (res.locals.validationFailed) return;
+  if (!role) return res.status(400).json({ error: "role must be 'viewer' or 'editor'" });
+  const result = await pool.query(
+    `UPDATE bom_shares SET role = $1 WHERE id = $2 AND bom_id = $3 RETURNING id, email, role, created_at, accepted_at`,
+    [role, req.params.shareId, req.params.id]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Share not found" });
+  res.json(result.rows[0]);
+}));
+
+bomsRouter.delete("/:id/shares/:shareId", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
+  await pool.query("DELETE FROM bom_shares WHERE id = $1 AND bom_id = $2", [req.params.shareId, req.params.id]);
+  res.status(204).send();
+}));
+
+// Public link setting: 'private' (default), 'view' (anyone with the link
+// can view), or 'edit' (anyone with the link can edit). Distinct from
+// per-email shares above; both are checked by lib/access.js.
+bomsRouter.patch("/:id/visibility", asyncHandler(async (req, res) => {
+  if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
+  const public_access = validateBody(() => optionalEnum(req.body?.public_access, "public_access", ["private", "view", "edit"]), res);
+  if (res.locals.validationFailed) return;
+  if (!public_access) return res.status(400).json({ error: "public_access is required" });
+  const result = await pool.query(
+    "UPDATE boms SET public_access = $1, updated_at = now() WHERE id = $2 RETURNING id, public_access",
+    [public_access, req.params.id]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  res.json(result.rows[0]);
 }));
 
 // --- Sections ---
@@ -257,12 +394,10 @@ bomsRouter.post("/:bomId/sections", asyncHandler(async (req, res) => {
   const icon_url = validateBody(() => optionalString(req.body?.icon_url, "icon_url", 4000), res);
   const sort_order = validateBody(() => optionalNumber(req.body?.sort_order, "sort_order", { min: 0, max: 100000000 }), res);
   if (res.locals.validationFailed) return;
-  // ownership check
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
-    req.params.bomId,
-    req.userId,
-  ]);
-  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  // ownership/role check -- editors can add sections, viewers can't
+  if (!await userOwnsBom(req.params.bomId, req.userId, "editor")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
 
   // Always land new sections at the end unless a sort_order was
   // explicitly given -- this is the fix for the "new rows appear in
@@ -291,11 +426,9 @@ bomsRouter.patch("/:bomId/sections/reorder", asyncHandler(async (req, res) => {
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: "orderedIds must be a non-empty array" });
   }
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [
-    req.params.bomId,
-    req.userId,
-  ]);
-  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  if (!await userOwnsBom(req.params.bomId, req.userId, "editor")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
 
   // Single statement instead of one UPDATE per row -- unnest() zips the
   // id list against its own index, so a 50-row reorder is one round trip
@@ -356,14 +489,22 @@ bomsRouter.post("/sections/:sectionId/restore", asyncHandler(async (req, res) =>
 // same way manually-added items do, so price shows up shortly after.
 bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler(async (req, res) => {
   const owns = await pool.query("SELECT id, doc_type, column_count FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
-  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  let bomRow = owns.rows[0];
+  if (!bomRow) {
+    // Not the owner -- fall back to role check (editor+ can import, same as any other mutation)
+    if (!await userOwnsBom(req.params.bomId, req.userId, "editor")) {
+      return res.status(404).json({ error: "BOM not found" });
+    }
+    const anyRow = await pool.query("SELECT id, doc_type, column_count FROM boms WHERE id = $1", [req.params.bomId]);
+    bomRow = anyRow.rows[0];
+  }
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  const isSheet = owns.rows[0].doc_type === "sheet";
+  const isSheet = bomRow.doc_type === "sheet";
 
   let parsed;
   try {
     parsed = isSheet
-      ? parseGenericSheet(req.file.buffer, owns.rows[0].column_count)
+      ? parseGenericSheet(req.file.buffer, bomRow.column_count)
       : parseSheet(req.file.buffer);
   }
   catch (e) {
@@ -444,9 +585,13 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
 // Downloads the BOM as a .xlsx in the same fixed column layout import-sheet
 // reads, so it round-trips: export, edit in a spreadsheet app, re-import.
 bomsRouter.get("/:bomId/export-sheet", asyncHandler(async (req, res) => {
+  // Read-only export -- viewers can download too, same as they can view the BOM.
+  if (!await userOwnsBom(req.params.bomId, req.userId, "viewer")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   const bomResult = await pool.query(
-    "SELECT * FROM boms WHERE id = $1 AND user_id = $2",
-    [req.params.bomId, req.userId]
+    "SELECT * FROM boms WHERE id = $1",
+    [req.params.bomId]
   );
   const bom = bomResult.rows[0];
   if (!bom) return res.status(404).json({ error: "BOM not found" });
@@ -490,8 +635,9 @@ bomsRouter.get("/:bomId/export-sheet", asyncHandler(async (req, res) => {
 }));
 
 bomsRouter.post("/:bomId/refresh-items", scrapeLimiter, asyncHandler(async (req, res) => {
-  const owns = await pool.query("SELECT id FROM boms WHERE id = $1 AND user_id = $2", [req.params.bomId, req.userId]);
-  if (!owns.rows[0]) return res.status(404).json({ error: "BOM not found" });
+  if (!await userOwnsBom(req.params.bomId, req.userId, "editor")) {
+    return res.status(404).json({ error: "BOM not found" });
+  }
   const filter = req.body?.filter || "all";
   if (!["amazon", "mouser", "other", "all"].includes(filter)) return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'other', or 'all'" });
   const result = await triggerBatchScrape(req.params.bomId, filter);

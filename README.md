@@ -77,6 +77,8 @@ emoji picker, drag-to-reorder are not built yet).
 
 After deploying the hardened API, run `api/db/migrations/006_security_hardening.sql` against the existing Neon database. Fresh installs should use `api/db/schema.sql`.
 
+**Sharing (added after the above):** also run `api/db/migrations/014_sharing.sql`. It adds `boms.public_access` and the `bom_shares` table that per-email viewer/editor sharing and "anyone with the link" access depend on. Nothing else needs to change — existing BOMs default to `public_access = 'private'` with no shares, i.e. unchanged owner-only access.
+
 For Render, set `FRONTEND_URL` to the exact Vercel origin (no trailing slash) and keep `API_PUBLIC_URL` set to the exact Render API origin.
 
 The production session is an HttpOnly cookie; the frontend already sends `credentials: "include"`.

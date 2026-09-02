@@ -217,3 +217,14 @@ export function IconCheck({ size = 16, color = "currentColor" }) {
     </svg>
   );
 }
+
+export function IconShare({ size = 16, color = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="M8.6 10.5 15.4 6.5M8.6 13.5l6.8 4" />
+    </svg>
+  );
+}
