@@ -1182,8 +1182,9 @@ export default function App() {
   }
 
   return (
-    <div style={pageShell}>
+    <div style={pageShell} className="bom-app-shell">
       <div
+        className="bom-content-shell"
         style={{ fontFamily: "sans-serif", padding: "32px 40px 60px", flex: 1, color: theme.text, maxWidth: 980, margin: "0 auto", width: "100%", boxSizing: "border-box" }}
         onContextMenu={(e) => {
           // Blank-canvas right click -> "Add table". Clicks inside a
@@ -1240,7 +1241,7 @@ export default function App() {
         )}
 
         {!bom && (
-          <div key="bom-list" className="bom-view-enter">
+          <div key="bom-list" className="bom-view-enter bom-list-view">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text }}>Your BOMs</h2>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1338,6 +1339,7 @@ export default function App() {
                 {bomList.map((b) => (
                   <div
                     key={b.id}
+                    className={`bom-list-card ${b.doc_type === "sheet" ? "is-sheet" : "is-bom"}`}
                     style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
                       background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10,
