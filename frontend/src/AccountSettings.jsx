@@ -182,10 +182,10 @@ export default function AccountSettings({ theme, user, onBack, onUpdated, onLogo
     finally { setDeleteSaving(false); }
   }
 
-  const cardStyle = { background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 24, marginBottom: 16 };
+  const cardStyle = { background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 16, padding: 24, marginBottom: 16, boxShadow: theme.shadow, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" };
 
   return (
-    <div style={{ minHeight: "100vh", background: theme.bg, color: theme.text, fontFamily: "sans-serif", padding: "32px 40px", boxSizing: "border-box" }}>
+    <div style={{ minHeight: "100vh", background: theme.pageBg || theme.bg, color: theme.text, fontFamily: "sans-serif", padding: "32px 40px", boxSizing: "border-box" }}>
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
         <button onClick={onBack} style={{ border: "none", background: "none", color: theme.muted, cursor: "pointer", padding: 0, marginBottom: 24 }}>← Back</button>
         <h1 style={{ margin: "0 0 8px", fontSize: 24 }}>Account settings</h1>

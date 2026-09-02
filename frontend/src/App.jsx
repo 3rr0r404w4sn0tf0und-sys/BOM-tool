@@ -364,8 +364,8 @@ export default function App() {
   // Keep the actual page background (outside our themed containers) in sync,
   // so there's no white/mismatched edge around the app on load or overscroll.
   useEffect(() => {
-    document.body.style.background = theme.bg;
-    document.documentElement.style.background = theme.bg;
+    document.body.style.background = theme.pageBg || theme.bg;
+    document.documentElement.style.background = theme.pageBg || theme.bg;
   }, [theme.bg]);
 
   // Show the privacy notice once, automatically, on a person's first visit.
@@ -943,8 +943,8 @@ export default function App() {
     minHeight: "100vh",
     display: "flex",
     flexDirection: "column",
-    background: theme.bg,
-    fontFamily: "sans-serif",
+    background: theme.pageBg || theme.bg,
+    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
     position: "relative",
     zIndex: 1,
   };
@@ -1209,6 +1209,20 @@ export default function App() {
           @keyframes bom-spin { to { transform: rotate(360deg); } }
           @keyframes bom-view-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
           .bom-view-enter { animation: bom-view-enter 220ms ease-out; }
+          * { box-sizing: border-box; }
+          ::selection { background: ${theme.accent}55; color: ${theme.text}; }
+          body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+          button, input, textarea, select { font: inherit; }
+          button { transition: transform 140ms ease, box-shadow 160ms ease, border-color 160ms ease, background 160ms ease, opacity 160ms ease; }
+          button:not(:disabled):hover { filter: brightness(1.035); }
+          button:not(:disabled):active { transform: translateY(1px); }
+          input, textarea, select { transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease; }
+          input:focus, textarea:focus, select:focus { outline: none; border-color: ${theme.accent} !important; box-shadow: 0 0 0 3px ${theme.accent}22 !important; }
+          ::-webkit-scrollbar { width: 10px; height: 10px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: ${theme.border}; border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+          ::-webkit-scrollbar-thumb:hover { background: ${theme.muted}; background-clip: padding-box; }
+          .bom-glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
         `}</style>
 
         {user && !user.email_verified && (
