@@ -108,3 +108,24 @@ CREATE UNIQUE INDEX idx_users_pending_email ON users(pending_email) WHERE pendin
 CREATE INDEX idx_users_email_change_token ON users(email_change_token) WHERE email_change_token IS NOT NULL;
 CREATE UNIQUE INDEX idx_users_oauth ON users(oauth_provider, oauth_id) WHERE oauth_provider IS NOT NULL;
 CREATE INDEX idx_boms_doc_type ON boms(user_id, doc_type);
+
+
+-- Nested edits advance the parent BOM timestamp so clients can use ETags.
+CREATE OR REPLACE FUNCTION touch_parent_bom_updated_at()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE target_bom UUID;
+BEGIN
+  IF TG_TABLE_NAME = 'sections' THEN
+    target_bom := COALESCE(NEW.bom_id, OLD.bom_id);
+  ELSE
+    SELECT bom_id INTO target_bom FROM sections WHERE id = COALESCE(NEW.section_id, OLD.section_id);
+  END IF;
+  IF target_bom IS NOT NULL THEN
+    UPDATE boms SET updated_at = clock_timestamp() WHERE id = target_bom;
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END; $$;
+CREATE TRIGGER trg_sections_touch_bom AFTER INSERT OR UPDATE OR DELETE ON sections FOR EACH ROW EXECUTE FUNCTION touch_parent_bom_updated_at();
+CREATE TRIGGER trg_items_touch_bom AFTER INSERT OR UPDATE OR DELETE ON items FOR EACH ROW EXECUTE FUNCTION touch_parent_bom_updated_at();
+CREATE INDEX idx_items_section_sort_active ON items(section_id, sort_order, created_at, id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_sections_bom_sort_active ON sections(bom_id, sort_order, created_at, id) WHERE deleted_at IS NULL;

@@ -76,7 +76,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
             gap: 10,
           }}
         >
-          <span style={{ fontSize: 14, color: theme.text, transition: "color 500ms ease" }}>
+          <span style={{ fontSize: 14, color: theme.text, }}>
             {themeName === "dark" ? "Dark mode" : "Light mode"}
           </span>
           <ThemeToggle isDark={themeName === "dark"} onToggle={onToggleTheme} />
@@ -84,7 +84,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
 
         {isLoggedIn && (
           <>
-            <div style={{ height: 1, background: theme.border, margin: "6px 0", transition: "background-color 500ms ease" }} />
+            <div style={{ height: 1, background: theme.border, margin: "6px 0", }} />
             {onAccountSettings && (
               <button
                 onClick={() => { setOpen(false); onAccountSettings(); }}
@@ -112,7 +112,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  transition: "color 500ms ease",
+                 ,
                 }}
               >
                 <IconPlug size={15} color={theme.text} />
@@ -137,7 +137,7 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                transition: "color 500ms ease",
+               ,
               }}
             >
               <IconLogout size={15} color={theme.errText} />

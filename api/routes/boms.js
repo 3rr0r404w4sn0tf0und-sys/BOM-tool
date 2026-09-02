@@ -147,6 +147,17 @@ bomsRouter.get("/:id", asyncHandler(async (req, res) => {
   const bom = bomResult.rows[0];
   if (!bom) return res.status(404).json({ error: "BOM not found" });
 
+  // Nested item/section changes advance boms.updated_at via migration 017.
+  // That lets polling return 304 without serializing 200+ rows when nothing
+  // changed. ETag is user-independent because authorization was already
+  // checked above; the body itself is still only returned to authorized users.
+  const etag = `W/\"${crypto.createHash("sha256").update(`${bom.id}:${new Date(bom.updated_at).toISOString()}`).digest("base64url")}\"`;
+  if (req.headers["if-none-match"] === etag) {
+    res.set("ETag", etag);
+    return res.status(304).end();
+  }
+  res.set("ETag", etag);
+
   // These two queries don't depend on each other -- fire them together
   // instead of waiting on one before starting the next.
   const [sectionsResult, itemsResult] = await Promise.all([

@@ -73,12 +73,20 @@ function mergeBom(prev, fresh) {
 
 export function useBomPolling(bom, setBom) {
   const bomRef = useRef(bom);
-  useEffect(() => { bomRef.current = bom; }, [bom]);
+  const etagRef = useRef(null);
+  useEffect(() => {
+    if (bomRef.current?.id !== bom?.id) etagRef.current = null;
+    bomRef.current = bom;
+  }, [bom]);
 
   const pollBomQuietly = useCallback(async (id) => {
     try {
-      const res = await apiFetch(`/api/boms/${id}`);
+      const headers = etagRef.current ? { "If-None-Match": etagRef.current } : {};
+      const res = await apiFetch(`/api/boms/${id}`, { headers });
+      if (res.status === 304) return;
       if (!res.ok) return;
+      const nextEtag = res.headers.get("ETag");
+      if (nextEtag) etagRef.current = nextEtag;
       const fresh = await res.json();
       setBom((prev) => mergeBom(prev, fresh));
     } catch {

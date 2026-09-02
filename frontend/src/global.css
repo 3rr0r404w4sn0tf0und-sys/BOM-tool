@@ -210,10 +210,55 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--b
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; }
 ::selection { background: color-mix(in srgb, var(--bom-accent) 35%, transparent); }
+
+/* Theme-aware browser scrollbars. The previous scrollbar was always the same
+   light slate color, which looked out of place in dark mode. Set both the
+   standards-based Firefox scrollbar colors and Chromium/WebKit pseudo-elements. */
+html { scrollbar-width: auto; scrollbar-color: rgba(100,116,139,.48) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(100,116,139,.34); border: 3px solid transparent; background-clip: padding-box; border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,.60); background-clip: padding-box; }
+::-webkit-scrollbar-thumb {
+  background: rgba(100,116,139,.48);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-height: 32px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(71,85,105,.72);
+  background-clip: padding-box;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+  scrollbar-color: rgba(100,116,139,.48) transparent;
+}
+html[data-theme="light"] ::-webkit-scrollbar-track { background: transparent; }
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(100,116,139,.48);
+  background-clip: padding-box;
+}
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(71,85,105,.72);
+  background-clip: padding-box;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  scrollbar-color: rgba(100,116,139,.62) rgba(8,12,24,.30);
+}
+html[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: rgba(6,9,18,.38);
+}
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(129,140,248,.72), rgba(71,85,105,.78));
+  border: 3px solid rgba(6,9,18,.34);
+  background-clip: padding-box;
+  box-shadow: 0 0 12px rgba(99,102,241,.12);
+}
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(165,180,252,.88), rgba(100,116,139,.92));
+  background-clip: padding-box;
+  box-shadow: 0 0 16px rgba(129,140,248,.22);
+}
 
 .bom-loading-sheen { position: relative; overflow: hidden; }
 .bom-loading-sheen::after { content: ""; position: absolute; inset: 0; pointer-events: none; transform: translateX(-120%); background: linear-gradient(100deg, transparent 25%, rgba(255,255,255,.12) 50%, transparent 75%); animation: bom-sheen 1.7s ease-in-out infinite; }
@@ -226,3 +271,79 @@ button { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+
+/* --- Navigation / toolbar polish --- */
+.bom-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--bom-text);
+  text-decoration: none;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.45px;
+  min-width: 0;
+}
+.bom-brand img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  box-shadow: 0 5px 16px rgba(15,23,42,.13);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.bom-brand:hover img { transform: translateY(-1px) rotate(-2deg); box-shadow: 0 8px 20px rgba(15,23,42,.18); }
+.bom-toolbar {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--bom-border) 80%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--bom-cardBg) 72%, transparent);
+  box-shadow: 0 8px 24px rgba(15,23,42,.055), inset 0 1px 0 rgba(255,255,255,.35);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+.bom-toolbar > * { flex-shrink: 0; }
+.bom-toolbar button { white-space: nowrap; }
+.bom-toolbar > span:last-child { margin-left: auto; }
+
+/* Don't transition hundreds of descendants when a theme changes. A theme
+   switch should be a single style update followed by one repaint, not a
+   500ms animation on every input/button/card in a large BOM. */
+[data-theme] input,
+[data-theme] textarea,
+[data-theme] select,
+[data-theme] button,
+[data-theme] a,
+[data-theme] .bom-list-card,
+[data-theme] .bom-section-surface,
+[data-theme] .bom-glass {
+  transition-property: transform, box-shadow, border-color, opacity;
+}
+
+/* Large tables: isolate each section's paint/layout work. */
+.bom-section-surface { contain: layout paint; }
+.bom-section-table { contain: layout style; }
+.bom-section-table tbody { contain: layout style; }
+
+/* Disable expensive backdrop blur on reduced-power/mobile environments. */
+@media (max-width: 900px), (prefers-reduced-transparency: reduce) {
+  .bom-toolbar, .bom-glass, .bom-list-card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+@media (max-width: 760px) {
+  .bom-toolbar { overflow-x: auto; flex-wrap: nowrap !important; scrollbar-width: thin; }
+  .bom-toolbar > span:last-child { margin-left: 0; }
+}
+
+.bom-toolbar-history button { min-width: 34px; padding-left: 8px !important; padding-right: 8px !important; font-size: 15px !important; }
+
+/* The BOM header remains useful on narrow windows without forcing the whole
+   page to grow horizontally. */
+@media (max-width: 860px) {
+  .bom-content-shell { padding-left: 22px !important; padding-right: 22px !important; }
+  .bom-toolbar { gap: 5px !important; }
+  .bom-toolbar button { padding-left: 9px !important; padding-right: 9px !important; }
+}
+
+html.bom-theme-switching *, html.bom-theme-switching *::before, html.bom-theme-switching *::after { transition: none !important; }

@@ -1,14 +1,14 @@
-// Light/dark theme tokens + persistence.
-// Persisted choice wins; otherwise falls back to system preference.
-
+// Theme tokens are CSS-variable references, not concrete colors. Keeping this
+// object stable is important: switching light/dark mode should update CSS,
+// not cause every 200+ BOM row to receive a new `theme` object and re-render.
 export const THEME_STORAGE_KEY = "bom-tool-theme";
 
 export const themes = {
   light: {
     name: "light",
-    pageBg: "linear-gradient(135deg, #f8fbff 0%, #eef3ff 42%, #faf5ff 72%, #f8fbff 100%)",
+    pageBg: "linear-gradient(135deg, #fffaf2 0%, #f4f7ff 32%, #fff5fb 66%, #f3fff9 100%)",
     bg: "#f8fafc",
-    cardBg: "rgba(255,255,255,0.88)",
+    cardBg: "rgba(255,255,255,0.86)",
     text: "#0f172a",
     muted: "#64748b",
     subtleText: "#475569",
@@ -56,13 +56,13 @@ export const themes = {
   },
 };
 
+const cssTheme = Object.freeze(Object.fromEntries(Object.keys(themes.light).map((key) => [key, `var(--bom-${key})`])));
+
 export function getInitialThemeName() {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (stored === "light" || stored === "dark") return stored;
-  } catch {
-    // localStorage unavailable — fall through to system pref
-  }
+  } catch {}
   if (typeof window !== "undefined" && window.matchMedia) {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
@@ -70,13 +70,21 @@ export function getInitialThemeName() {
 }
 
 export function persistThemeName(name) {
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, name);
-  } catch {
-    // ignore — non-fatal if storage is unavailable
-  }
+  try { window.localStorage.setItem(THEME_STORAGE_KEY, name); } catch {}
 }
 
-export function getTheme(name) {
-  return themes[name] || themes.light;
+// Stable reference returned for every theme. Components can safely memoize
+// against `theme` while CSS variables update underneath them.
+export function getTheme() {
+  return cssTheme;
+}
+
+export function applyTheme(name) {
+  const root = document.documentElement;
+  const actual = themes[name] || themes.light;
+  for (const [key, value] of Object.entries(actual)) {
+    if (key !== "name") root.style.setProperty(`--bom-${key}`, value);
+  }
+  root.dataset.theme = actual.name;
+  root.style.colorScheme = actual.name;
 }

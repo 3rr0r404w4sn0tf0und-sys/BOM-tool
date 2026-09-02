@@ -10,7 +10,7 @@ import ApiModal from "./ApiModal.jsx";
 import ApifyKeyModal from "./ApifyKeyModal.jsx";
 import ShareModal from "./ShareModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh, IconShare } from "./Icons.jsx";
-import { getInitialThemeName, persistThemeName, getTheme } from "./theme.js";
+import { getInitialThemeName, persistThemeName, getTheme, themes } from "./theme.js";
 import { calculateTotals, allItems } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
 import { useBomPolling } from "./useBomPolling.js";
@@ -61,6 +61,11 @@ export default function App() {
   const [bomList, setBomList] = useState(null); // null = not loaded yet, [] = loaded/empty
   const [bomListLoading, setBomListLoading] = useState(false);
   const [openingBomId, setOpeningBomId] = useState(null);
+  // Small in-memory cache makes revisiting a 200+ row BOM instant while the
+  // authoritative request refreshes it in the background. Keep it bounded.
+  const bomCacheRef = useRef(new Map());
+  const bomLoadRequestRef = useRef(0);
+  const bomAbortRef = useRef(null);
   const [bomLoadError, setBomLoadError] = useState(null);
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -78,26 +83,32 @@ export default function App() {
   const [taxRateDraft, setTaxRateDraft] = useState("");
   const [dragSectionId, setDragSectionId] = useState(null);
   const [dragOverSectionId, setDragOverSectionId] = useState(null);
-  const theme = getTheme(themeName);
+  const theme = getTheme();
   const history = useUndoRedo();
 
   useEffect(() => {
-    document.documentElement.dataset.theme = themeName;
-    document.documentElement.style.setProperty("--bom-accent", theme.accent);
-    document.documentElement.style.setProperty("--bom-text", theme.text);
-    document.documentElement.style.setProperty("--bom-muted", theme.muted);
-    return () => {
-      delete document.documentElement.dataset.theme;
-      document.documentElement.style.removeProperty("--bom-accent");
-      document.documentElement.style.removeProperty("--bom-text");
-      document.documentElement.style.removeProperty("--bom-muted");
-    };
-  }, [themeName, theme]);
+    // Update CSS variables only. `theme` is intentionally a stable object so
+    // 200+ memoized BOM rows do not re-render during a theme switch.
+    const actual = themes[themeName] || themes.light;
+    const root = document.documentElement;
+    root.dataset.theme = themeName;
+    root.style.colorScheme = themeName;
+    for (const [key, value] of Object.entries(actual)) {
+      if (key !== "name") root.style.setProperty(`--bom-${key}`, value);
+    }
+  }, [themeName]);
 
   // Stable live reference used by mutation callbacks so they can avoid
   // closing over the whole BOM object and forcing every table to re-render.
   const bomRef = useRef(bom);
-  useEffect(() => { bomRef.current = bom; }, [bom]);
+  useEffect(() => {
+    bomRef.current = bom;
+    if (!bom) return;
+    const cache = bomCacheRef.current;
+    cache.delete(bom.id);
+    cache.set(bom.id, bom);
+    while (cache.size > 6) cache.delete(cache.keys().next().value);
+  }, [bom]);
 
   // Applies a local edit to bom.sections and recomputes totals from it --
   // this is what lets add/delete/edit/reorder feel instant instead of
@@ -367,6 +378,13 @@ export default function App() {
   }
 
   function toggleTheme() {
+    // Suppress hover/focus transitions for the single theme-change frame.
+    // With 200+ rows, animating every border/background during a theme switch
+    // is much more expensive than applying the new CSS variables immediately.
+    document.documentElement.classList.add("bom-theme-switching");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.documentElement.classList.remove("bom-theme-switching");
+    }));
     setThemeName((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       persistThemeName(next);
@@ -377,9 +395,10 @@ export default function App() {
   // Keep the actual page background (outside our themed containers) in sync,
   // so there's no white/mismatched edge around the app on load or overscroll.
   useEffect(() => {
-    document.body.style.background = theme.pageBg || theme.bg;
-    document.documentElement.style.background = theme.pageBg || theme.bg;
-  }, [theme.bg]);
+    const actual = themes[themeName] || themes.light;
+    document.body.style.background = actual.pageBg || actual.bg;
+    document.documentElement.style.background = actual.pageBg || actual.bg;
+  }, [themeName]);
 
   // Show the privacy notice once, automatically, on a person's first visit.
   // It stays reachable afterward via the footer link regardless.
@@ -648,43 +667,54 @@ export default function App() {
   }
 
   async function loadBom(id) {
+    const requestId = ++bomLoadRequestRef.current;
+    bomAbortRef.current?.abort();
+    const controller = new AbortController();
+    bomAbortRef.current = controller;
     setOpeningBomId(id);
     setBomLoadError(null);
     setSheetImportJustSucceeded(false);
-    // Previously this had no try/catch: if the fetch failed, or the
-    // response wasn't valid JSON (e.g. a 500/timeout returning an HTML
-    // error page instead), the exception meant setOpeningBomId(null)
-    // below never ran -- the button was stuck showing its loading
-    // spinner forever with no error, no matter how many times you
-    // clicked. This is what "click it, it just loads forever" was.
+
+    // Paint a cached copy immediately when available. This removes the
+    // perceived "loading" delay when navigating back to a large BOM.
+    const cached = bomCacheRef.current.get(id);
+    if (cached) {
+      bomCacheRef.current.delete(id);
+      bomCacheRef.current.set(id, cached);
+      setBom(cached);
+    }
+
     try {
       const res = await apiFetch(`${API_URL}/api/boms/${id}`, {
-        headers: { },
+        headers: {},
+        signal: controller.signal,
       });
       if (!res.ok) {
-        // 404 covers both "doesn't exist" and "exists but you have no
-        // access" -- deliberately not distinguished, so a bad guess at
-        // someone else's BOM id can't be used to confirm it's real.
         let message = res.status === 404
           ? "You don't have access to this BOM, or it doesn't exist."
           : `Failed to load BOM (${res.status})`;
         try {
           const body = await res.json();
           if (body?.error && res.status !== 404) message = body.error;
-        } catch {
-          // response wasn't JSON (e.g. a raw 500/502 HTML page) -- fall
-          // back to the generic status-based message above
+        } catch {}
+        if (requestId === bomLoadRequestRef.current) {
+          setAccessDeniedNotice(res.status === 404 ? message : null);
+          throw new Error(message);
         }
-        setAccessDeniedNotice(res.status === 404 ? message : null);
-        throw new Error(message);
+        return;
       }
+      const fresh = await res.json();
+      if (requestId !== bomLoadRequestRef.current) return;
       setAccessDeniedNotice(null);
-      setBom(await res.json());
+      setBom(fresh);
     } catch (e) {
-      console.error("loadBom failed:", e);
-      setBomLoadError(e.message || "Failed to load this BOM. Please try again.");
+      if (e?.name === "AbortError") return;
+      if (requestId === bomLoadRequestRef.current) {
+        console.error("loadBom failed:", e);
+        setBomLoadError(e.message || "Failed to load this BOM. Please try again.");
+      }
     } finally {
-      setOpeningBomId(null);
+      if (requestId === bomLoadRequestRef.current) setOpeningBomId(null);
     }
   }
 
@@ -713,6 +743,9 @@ export default function App() {
   }
 
   function exitBom() {
+    bomAbortRef.current?.abort();
+    bomLoadRequestRef.current += 1;
+    setOpeningBomId(null);
     setBom(null);
     loadBomList();
   }
@@ -1206,7 +1239,10 @@ export default function App() {
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
-          <h1 style={{ color: theme.text, fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: -0.3 }}>BOM Tool</h1>
+          <a href="/home" className="bom-brand" aria-label="BOM Tool home" onClick={(e) => { e.preventDefault(); if (bom) { exitBom(); } else { window.history.pushState({}, "", "/home"); } }}>
+            <img src="/favicon.svg" alt="" width="30" height="30" />
+            <span>BOM Tool</span>
+          </a>
           <SettingsMenu
             theme={theme}
             themeName={themeName}
@@ -1445,7 +1481,7 @@ export default function App() {
               )}
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            <div className="bom-toolbar" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
               {bom.role === "owner" && (
                 <button
                   onClick={() => setShowShareModal(true)}
@@ -1504,7 +1540,7 @@ export default function App() {
                   cursor: sheetImporting ? "default" : "pointer", opacity: sheetImporting ? 0.6 : 1,
                 }}
               >
-                <IconUpload size={13} /> {sheetImporting ? "Importing…" : bom.doc_type === "sheet" ? "Import Sheet (Doc)" : "Import Sheet (BOM)"}
+                <IconUpload size={13} /> {sheetImporting ? "Importing…" : "Import"}
               </button>
               )}
               <button
@@ -1518,7 +1554,7 @@ export default function App() {
                   cursor: sheetExporting ? "default" : "pointer", opacity: sheetExporting ? 0.6 : 1,
                 }}
               >
-                <IconDownload size={13} /> {sheetExporting ? "Exporting…" : "Export Sheet"}
+                <IconDownload size={13} /> {sheetExporting ? "Exporting…" : "Export"}
               </button>
               {bom.role !== "viewer" && (
               <button
@@ -1533,26 +1569,26 @@ export default function App() {
               </button>
               )}
               {bom.role !== "viewer" && (
-              <span style={{ display: "inline-flex", marginLeft: "auto", gap: 4 }}>
+              <span className="bom-toolbar-history" style={{ display: "inline-flex", marginLeft: "auto", gap: 4 }}>
                 <button
                   onClick={history.undo}
-                  title="Undo (Ctrl+Z)"
+                  title="Undo (Ctrl+Z)" aria-label="Undo"
                   style={{
                     padding: "7px 10px", border: `1px solid ${theme.border}`, borderRadius: 8,
                     background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
                   }}
                 >
-                  ↶ Undo
+                  ↶
                 </button>
                 <button
                   onClick={history.redo}
-                  title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+                  title="Redo (Ctrl+Y / Ctrl+Shift+Z)" aria-label="Redo"
                   style={{
                     padding: "7px 10px", border: `1px solid ${theme.border}`, borderRadius: 8,
                     background: theme.cardBg, color: theme.text, fontSize: 13, fontWeight: 600, cursor: "pointer",
                   }}
                 >
-                  ↷ Redo
+                  ↷
                 </button>
               </span>
               )}
