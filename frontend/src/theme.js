@@ -6,7 +6,7 @@ export const THEME_STORAGE_KEY = "bom-tool-theme";
 export const themes = {
   light: {
     name: "light",
-    pageBg: "linear-gradient(135deg, #f8fafc 0%, #eef2ff 52%, #f8fafc 100%)",
+    pageBg: "linear-gradient(135deg, #f8fbff 0%, #eef3ff 42%, #faf5ff 72%, #f8fbff 100%)",
     bg: "#f8fafc",
     cardBg: "rgba(255,255,255,0.88)",
     text: "#0f172a",
@@ -31,7 +31,7 @@ export const themes = {
   },
   dark: {
     name: "dark",
-    pageBg: "radial-gradient(circle at 15% 0%, #172554 0%, #0b1020 42%, #070b14 100%)",
+    pageBg: "radial-gradient(circle at 18% 4%, #172554 0%, #0d1428 38%, #080c18 72%, #060912 100%)",
     bg: "#0b1020",
     cardBg: "rgba(17,24,39,0.82)",
     text: "#f8fafc",
