@@ -4,8 +4,28 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>BOM Tool</title>
+    <script>
+      // Applied synchronously, before first paint, so the page (including
+      // native scrollbars and form controls, which key off color-scheme)
+      // never flashes light before React mounts and runs its own theme
+      // effect. Mirrors the storage key / fallback logic in theme.js.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("bom-tool-theme");
+          var name = stored === "light" || stored === "dark"
+            ? stored
+            : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          var root = document.documentElement;
+          root.dataset.theme = name;
+          root.style.colorScheme = name;
+        } catch (e) {}
+      })();
+    </script>
     <style>
       html, body { margin: 0; padding: 0; }
+      html { background: #f7f4ef; }
+      html[data-theme="dark"] { background: #0b1020; }
+      html[data-theme="dark"] body { background: #0b1020; }
       #root { min-height: 100vh; }
       body, #root, * {
         transition: background-color 500ms ease, border-color 500ms ease, color 500ms ease, box-shadow 500ms ease;

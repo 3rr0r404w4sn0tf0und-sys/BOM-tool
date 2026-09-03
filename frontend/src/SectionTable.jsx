@@ -328,7 +328,7 @@ const BomRow = memo(function BomRow({
               type="checkbox"
               checked={item.checked === true}
               onChange={(e) => onPatchItem(sectionId, item.id, { checked: e.target.checked })}
-              style={{ cursor: "pointer", width: 15, height: 15 }}
+              style={{ cursor: "pointer", width: 15, height: 15, accentColor: theme.accent }}
             />
           </td>
         </>

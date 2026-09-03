@@ -569,7 +569,7 @@ bomsRouter.post("/:bomId/import-sheet", sheetUpload.single("file"), asyncHandler
           const checkeds = section.items.map((i) => i.checked !== false);
           const itemsResult = await client.query(
             `INSERT INTO items (section_id, name, sheet_data, checked, sort_order, status)
-             SELECT $1, '', data.sheet_data::jsonb, data.checked, data.sort_order, 'price_not_found'
+             SELECT $1, '', data.sheet_data::jsonb, data.checked, data.sort_order, 'ok'
              FROM unnest($2::text[], $3::boolean[], $4::int[])
                AS data(sheet_data, checked, sort_order) RETURNING *`,
             [newSection.id, sheetDatas, checkeds, sortOrders]
