@@ -621,6 +621,7 @@ export default function App() {
     try {
       const res = await apiFetch(`${API_URL}/api/auth/login`, {
         method: "POST",
+        skipCsrf: true, // no session exists yet to derive a CSRF token from; the server doesn't require one here either
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
@@ -646,6 +647,7 @@ export default function App() {
     try {
       const res = await apiFetch(`${API_URL}/api/auth/register`, {
         method: "POST",
+        skipCsrf: true, // no session exists yet to derive a CSRF token from; the server doesn't require one here either
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
       });
