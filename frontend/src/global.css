@@ -282,20 +282,28 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   gap: 9px;
   color: var(--bom-text);
   text-decoration: none;
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 750;
-  letter-spacing: -0.45px;
+  letter-spacing: -0.3px;
   min-width: 0;
+  padding: 6px 16px 6px 8px;
+  border-radius: 999px;
+  background: var(--bom-cardBg);
+  border: 1px solid var(--bom-border);
+  box-shadow: var(--bom-shadow);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
 }
 .bom-brand img {
   display: block;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  box-shadow: 0 5px 16px rgba(15,23,42,.13);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  box-shadow: 0 3px 10px rgba(15,23,42,.13);
   transition: transform 180ms ease, box-shadow 180ms ease;
 }
-.bom-brand:hover img { transform: translateY(-1px) rotate(-2deg); box-shadow: 0 8px 20px rgba(15,23,42,.18); }
+a.bom-brand { cursor: pointer; }
+a.bom-brand:hover { transform: translateY(-1px); box-shadow: var(--bom-shadowHover); border-color: color-mix(in srgb, var(--bom-accent) 45%, var(--bom-border)); }
+a.bom-brand:hover img { transform: rotate(-6deg); }
 .bom-toolbar {
   padding: 7px;
   border: 1px solid color-mix(in srgb, var(--bom-border) 80%, transparent);

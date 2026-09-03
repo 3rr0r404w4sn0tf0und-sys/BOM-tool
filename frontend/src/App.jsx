@@ -11,12 +11,14 @@ import ApifyKeyModal from "./ApifyKeyModal.jsx";
 import ShareModal from "./ShareModal.jsx";
 import { IconWarning, IconEnvelope, IconCoin, IconPlus, IconTable, IconArrowLeft, IconFolder, IconTrash, IconPencil, IconPlug, IconUpload, IconDownload, IconRefresh, IconShare } from "./Icons.jsx";
 import { getInitialThemeName, persistThemeName, getTheme, themes } from "./theme.js";
-import { calculateTotals, allItems } from "./totals.js";
+import { calculateTotals, allItems, formatMoney } from "./totals.js";
 import { useUndoRedo } from "./useUndoRedo.js";
 import { useBomPolling } from "./useBomPolling.js";
 import RefreshMenu from "./RefreshMenu.jsx";
 import FinishSignup from "./FinishSignup.jsx";
 import AccountSettings from "./AccountSettings.jsx";
+import Landing from "./Landing.jsx";
+import { useInactivityLogout } from "./useInactivityLogout.js";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PRIVACY_SEEN_KEY = "bom-tool-privacy-seen";
 
@@ -52,6 +54,11 @@ export default function App() {
   const [onboardingToken, setOnboardingToken] = useState(() => { try { return sessionStorage.getItem("bom-onboarding-token"); } catch { return null; } });
   const [accountSettings, setAccountSettings] = useState(false);
   const [emailChangeMessage, setEmailChangeMessage] = useState(null);
+  // Public marketing page at "/". Logged-out visitors land here first;
+  // Login/Sign Up (top right) take them to the existing /login /register
+  // forms. Logged-in visitors never see it — the URL-sync effect always
+  // resolves them to /dashboard instead.
+  const [landing, setLanding] = useState(false);
 
   const [themeName, setThemeName] = useState(getInitialThemeName);
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -430,6 +437,10 @@ export default function App() {
     setAccountSettings(false);
   }
 
+  // Security: sign the person out after 3h with no activity in any tab,
+  // even though the underlying session cookie is valid for much longer.
+  useInactivityLogout(!!token, logout);
+
   // On load, ask the API whether the HttpOnly session cookie is still valid.
   useEffect(() => {
     const hasEmailChangeToken = new URLSearchParams(window.location.search).has("email_change_token");
@@ -548,7 +559,7 @@ export default function App() {
     setVerifyStatus(null);
     setVerifyMessage(null);
     setJustRegisteredEmail(null);
-    window.history.replaceState({}, "", "/home");
+    window.history.replaceState({}, "", "/dashboard");
   }
 
   function openAccountSettings() {
@@ -760,7 +771,7 @@ export default function App() {
       body: JSON.stringify({ title: next }),
     });
     setBomList(null);
-    loadBom(bom.id);
+    pollBomQuietly(bom.id);
   }
 
   async function saveTaxRate() {
@@ -774,7 +785,7 @@ export default function App() {
       headers: { "Content-Type": "application/json", },
       body: JSON.stringify({ tax_rate: rate }),
     });
-    loadBom(bom.id);
+    pollBomQuietly(bom.id);
   }
 
   async function deleteBom(id) {
@@ -835,7 +846,12 @@ export default function App() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Refresh failed");
       }
-      await loadBom(bom.id);
+      // Merge the fresh copy into current state instead of a raw overwrite
+      // (loadBom). refresh-items can take a few seconds server-side, and a
+      // plain setBom(fresh) here would silently clobber anything the person
+      // added locally in the meantime (e.g. a new table/row) with a
+      // response snapshot taken before that change existed.
+      await pollBomQuietly(bom.id);
     } catch (err) {
       setSheetImportError(err.message || "Refresh failed");
     } finally {
@@ -862,7 +878,10 @@ export default function App() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Import failed");
       }
-      await loadBom(bom.id);
+      // Same race as refreshItems: merge instead of a raw overwrite, so an
+      // import that takes a few seconds can't clobber a table/row the
+      // person added locally while it was in flight.
+      await pollBomQuietly(bom.id);
       setSheetImportJustSucceeded(true);
     } catch (err) {
       setSheetImportError(err.message || "Import failed");
@@ -918,19 +937,22 @@ export default function App() {
     const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
     if (!token) {
       if (path === "/finish" && onboardingToken) return;
-      // Not logged in: only /login and /register are meaningful; anything
-      // else (including a deep-linked /sheet/<id>) falls back to /login,
-      // but remembers the sheet id so we can jump straight there post-login.
+      // Not logged in: "/" is the public landing page, /login and /register
+      // are the auth forms, and anything else (including a deep-linked
+      // /sheet/<id>) falls back to landing, but remembers the sheet id so
+      // we can jump straight there post-login.
       if (sheetMatch) pendingDeepLinkBomId.current = sheetMatch[1];
-      if (path === "/register") setMode("register");
-      else setMode("login");
+      if (path === "/register") { setMode("register"); setLanding(false); }
+      else if (path === "/login") { setMode("login"); setLanding(false); }
+      else { setLanding(true); }
       return;
     }
+    setLanding(false);
     if (sheetMatch) {
       loadBom(sheetMatch[1]);
     }
-    // token is set but path was /login, /register, "/", or anything else
-    // unrecognized: just let it fall through to /home below.
+    // token is set but path was /login, /register, "/", "/dashboard", or
+    // anything else unrecognized: just let it fall through to /dashboard below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authChecking, token]);
 
@@ -950,12 +972,12 @@ export default function App() {
   useEffect(() => {
     if (authChecking) return;
     const path = !token
-      ? (onboardingToken ? "/finish" : mode === "register" ? "/register" : "/login")
-      : accountSettings ? "/settings/account" : bom ? `/sheet/${bom.id}` : "/home";
+      ? (onboardingToken ? "/finish" : landing ? "/" : mode === "register" ? "/register" : "/login")
+      : accountSettings ? "/settings/account" : bom ? `/sheet/${bom.id}` : "/dashboard";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  }, [authChecking, token, mode, bom, onboardingToken, accountSettings]);
+  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, landing]);
 
   // Support the browser's back/forward buttons.
   useEffect(() => {
@@ -964,7 +986,9 @@ export default function App() {
       const sheetMatch = path.match(/^\/sheet\/([A-Za-z0-9_-]{6,})\/?$/);
       if (!token) {
         if (path === "/finish" && onboardingToken) return;
-        setMode(path === "/register" ? "register" : "login");
+        if (path === "/register") { setMode("register"); setLanding(false); }
+        else if (path === "/login") { setMode("login"); setLanding(false); }
+        else setLanding(true);
         return;
       }
       if (path === "/settings/account") { setAccountSettings(true); return; }
@@ -1062,6 +1086,18 @@ export default function App() {
         <Footer theme={theme} onPrivacyClick={() => setShowPrivacy(true)} />
         {showPrivacy && <PrivacyModal theme={theme} onClose={() => setShowPrivacy(false)} />}
         </div>
+    );
+  }
+
+  if (!token && landing) {
+    return (
+      <Landing
+        theme={theme}
+        themeName={themeName}
+        onToggleTheme={toggleTheme}
+        onLogin={() => { setMode("login"); setLanding(false); window.history.pushState({}, "", "/login"); }}
+        onSignUp={() => { setMode("register"); setLanding(false); window.history.pushState({}, "", "/register"); }}
+      />
     );
   }
 
@@ -1211,7 +1247,7 @@ export default function App() {
   }
 
   if (accountSettings) {
-    return <AccountSettings theme={theme} user={user} onLogout={logout} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/home"); }} onUpdated={(u) => setUser(u)} />;
+    return <AccountSettings theme={theme} user={user} onLogout={logout} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/dashboard"); }} onUpdated={(u) => setUser(u)} />;
   }
 
   return (
@@ -1239,8 +1275,8 @@ export default function App() {
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28 }}>
-          <a href="/home" className="bom-brand" aria-label="BOM Tool home" onClick={(e) => { e.preventDefault(); if (bom) { exitBom(); } else { window.history.pushState({}, "", "/home"); } }}>
-            <img src="/favicon.svg" alt="" width="30" height="30" />
+          <a href="/dashboard" className="bom-brand" aria-label="Back to your BOMs" title="Back to your BOMs" onClick={(e) => { e.preventDefault(); if (bom) { exitBom(); } else { window.history.pushState({}, "", "/dashboard"); } }}>
+            <img src="/favicon.svg" alt="" width="24" height="24" />
             <span>BOM Tool</span>
           </a>
           <SettingsMenu
@@ -1710,9 +1746,12 @@ export default function App() {
                 marginLeft: "auto",
               }}
             >
+              <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12.5, color: theme.muted }}>
+                <span>{allItems(bom.sections).length} item{allItems(bom.sections).length === 1 ? "" : "s"}</span>
+              </span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13.5, color: theme.subtleText }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}><IconCoin size={14} color={theme.subtleText} /> Subtotal</span>
-                <span>${bom.totals.subtotal.toFixed(2)}</span>
+                <span>${formatMoney(bom.totals.subtotal)}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13.5, color: theme.subtleText }}>
                 {taxRateEditing && bom.role !== "viewer" ? (
@@ -1759,12 +1798,12 @@ export default function App() {
                 ) : (
                   <span>Tax ({(Number(bom.tax_rate) * 100).toFixed(2)}%)</span>
                 )}
-                <span>${bom.totals.tax.toFixed(2)}</span>
+                <span>${formatMoney(bom.totals.tax)}</span>
               </span>
               <span style={{ height: 1, background: theme.border, margin: "4px 0" }} />
               <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 16, fontWeight: 700, color: theme.text }}>
                 <span>Total</span>
-                <span>${bom.totals.total.toFixed(2)}</span>
+                <span>${formatMoney(bom.totals.total)}</span>
               </span>
             </div>
             )}

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, memo } from "react";
 import { API_URL, apiFetch } from "./api.js";
 import ContextMenu from "./ContextMenu.jsx";
 import { IconTrash, IconPlus, IconWarning, IconClock, IconPencil, IconRefresh, IconGrip, IconSmiley } from "./Icons.jsx";
+import { formatMoney } from "./totals.js";
 
 // Common section emoji, grouped loosely by what people actually label
 // BOM tables with (electronics/hardware-flavored, since that's the app),
@@ -206,11 +207,11 @@ function CostCell({ item, theme, onResolved }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
           <span style={{ fontSize: 13.5, color: theme.text, fontWeight: 600 }}>
-            ${lineTotal.toFixed(2)}
+            ${formatMoney(lineTotal)}
           </span>
           {Number(item.qty ?? 1) !== 1 && (
             <span style={{ fontSize: 11, color: theme.muted }}>
-              ${Number(item.unit_price).toFixed(2)} × {item.qty}
+              ${formatMoney(item.unit_price)} × {item.qty}
             </span>
           )}
           {item.stale_price && (
@@ -533,6 +534,15 @@ function SectionTable({
             </button>
           )}
           <EmojiPicker theme={theme} value={section.emoji} onChange={(e) => onChangeEmoji(section.id, e)} />
+          <span
+            title={isSheet ? "Rows in this table" : "Items in this table"}
+            style={{
+              fontSize: 11.5, fontWeight: 700, color: theme.muted, background: theme.rowBorder,
+              borderRadius: 999, padding: "2px 8px", flexShrink: 0,
+            }}
+          >
+            {section.items.length}
+          </span>
         </div>
 
         <button

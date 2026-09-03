@@ -563,7 +563,7 @@ async function redirectWithToken(res, userId) {
   const sessionId = await createSession(userId);
   const token = issueSessionToken(userId, sessionId);
   setAuthCookie(res, token);
-  res.redirect(`${FRONTEND_URL}${needsFinish ? "/finish" : "/home"}`);
+  res.redirect(`${FRONTEND_URL}${needsFinish ? "/finish" : "/dashboard"}`);
 }
 
 function redirectWithError(res, message) {

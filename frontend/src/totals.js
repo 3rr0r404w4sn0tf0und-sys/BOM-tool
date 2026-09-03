@@ -1,6 +1,12 @@
 // Mirrors api/db/totals.js exactly, so local optimistic updates (add row,
 // edit qty, delete row, undo/redo...) can recompute the subtotal/tax/total
 // instantly on the client instead of waiting on a server round trip.
+
+// Thousands-separated currency string, e.g. 12290.65 -> "12,290.65". Used
+// everywhere a dollar amount is shown so large BOMs stay readable.
+export function formatMoney(n) {
+  return Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 export function calculateTotals(items, taxRate) {
   const validItems = items.filter((i) => i.status === "ok" && i.unit_price !== null);
   const excludedCount = items.filter(

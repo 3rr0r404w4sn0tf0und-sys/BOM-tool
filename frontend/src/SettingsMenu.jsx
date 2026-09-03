@@ -112,7 +112,6 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                 ,
                 }}
               >
                 <IconPlug size={15} color={theme.text} />
@@ -137,7 +136,6 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-               ,
               }}
             >
               <IconLogout size={15} color={theme.errText} />

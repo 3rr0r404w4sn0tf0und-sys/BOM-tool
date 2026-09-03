@@ -108,7 +108,7 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
     ));
 
-  const money = (n) => `$${Number(n).toFixed(2)}`;
+  const money = (n) => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const colspan = showPrice ? 3 : 2;
 
   const sectionsHtml = sections.map((s) => {
@@ -142,7 +142,7 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
       <table class="bom-section">
         <thead>
           <tr class="section-title-row">
-            <th colspan="${colspan}">${icon}${esc(s.title)}</th>
+            <th colspan="${colspan}">${icon}${esc(s.title)}<span class="section-count">${s.items.length} item${s.items.length === 1 ? "" : "s"}</span></th>
           </tr>
           <tr class="col-headers">
             <th class="name">Name</th>
@@ -207,6 +207,20 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
     text-align: left;
     padding: 12px 16px;
     border: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .section-count {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 9px;
+    flex-shrink: 0;
   }
   .section-icon { margin-right: 8px; }
   .col-headers th {
@@ -251,6 +265,7 @@ function renderBomHtmlPage(bom, sections, totals, { showPrice }) {
     <h1>${esc(bom.title)}</h1>
     ${sectionsHtml}
     <div class="totals">
+      <div class="row muted"><span>${sections.reduce((n, s) => n + s.items.length, 0)} item${sections.reduce((n, s) => n + s.items.length, 0) === 1 ? "" : "s"}</span></div>
       <div class="row"><span>Subtotal</span><span>${money(totals.subtotal)}</span></div>
       <div class="row"><span>Tax</span><span>${money(totals.tax)}</span></div>
       <div class="row total"><span>Total</span><span>${money(totals.total)}</span></div>
