@@ -291,7 +291,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: var(--bom-cardBg);
   border: 1px solid var(--bom-border);
   box-shadow: var(--bom-shadow);
-  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 400ms ease, color 400ms ease;
 }
 .bom-brand img {
   display: block;
@@ -305,6 +305,9 @@ a.bom-brand { cursor: pointer; }
 a.bom-brand:hover { transform: translateY(-1px); box-shadow: var(--bom-shadowHover); border-color: color-mix(in srgb, var(--bom-accent) 45%, var(--bom-border)); }
 a.bom-brand:hover img { transform: rotate(-6deg); }
 .bom-toolbar {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   padding: 7px;
   border: 1px solid color-mix(in srgb, var(--bom-border) 80%, transparent);
   border-radius: 13px;
@@ -315,7 +318,10 @@ a.bom-brand:hover img { transform: rotate(-6deg); }
 }
 .bom-toolbar > * { flex-shrink: 0; }
 .bom-toolbar button { white-space: nowrap; }
-.bom-toolbar > span:last-child { margin-left: auto; }
+/* A fixed gap, not margin-left: auto — the toolbar now hugs its own
+   content (see width: fit-content above) instead of stretching edge to
+   edge, so an "auto" push would just widen the empty gap even further. */
+.bom-toolbar > span:last-child { margin-left: 14px; }
 
 /* Don't transition hundreds of descendants when a theme changes. A theme
    switch should be a single style update followed by one repaint, not a
@@ -356,4 +362,10 @@ a.bom-brand:hover img { transform: rotate(-6deg); }
   .bom-toolbar button { padding-left: 9px !important; padding-right: 9px !important; }
 }
 
-html.bom-theme-switching *, html.bom-theme-switching *::before, html.bom-theme-switching *::after { transition: none !important; }
+/* During a theme toggle, skip the (relatively expensive, at 200+ rows)
+   border/shadow/transform transitions on every row, but keep a quick color
+   fade rather than an instant snap — a hard "none" here reads as broken/
+   flickery rather than smooth. */
+html.bom-theme-switching *, html.bom-theme-switching *::before, html.bom-theme-switching *::after {
+  transition: background-color 160ms ease, color 160ms ease !important;
+}

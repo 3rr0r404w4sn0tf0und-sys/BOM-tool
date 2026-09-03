@@ -316,7 +316,7 @@ bomsRouter.get("/:id/shares", asyncHandler(async (req, res) => {
   }
   const result = await pool.query(
     `SELECT bom_shares.id, bom_shares.email, bom_shares.role, bom_shares.created_at, bom_shares.accepted_at,
-            users.email AS account_email
+            users.email AS account_email, users.username
      FROM bom_shares LEFT JOIN users ON users.id = bom_shares.user_id
      WHERE bom_shares.bom_id = $1 ORDER BY bom_shares.created_at ASC`,
     [req.params.id]
@@ -329,11 +329,37 @@ bomsRouter.post("/:id/shares", shareInviteLimiter, asyncHandler(async (req, res)
   if (!await userOwnsBom(req.params.id, req.userId, "owner")) {
     return res.status(404).json({ error: "BOM not found" });
   }
-  const emailRaw = validateBody(() => optionalString(req.body?.email, "email", 320), res);
+  const identifierRaw = validateBody(() => optionalString(req.body?.email ?? req.body?.identifier, "identifier", 320), res);
   if (res.locals.validationFailed) return;
-  const email = normalizeEmail(emailRaw);
+  const identifier = typeof identifierRaw === "string" ? identifierRaw.trim() : "";
+  if (!identifier) {
+    return res.status(400).json({ error: "A username or email is required" });
+  }
+
+  // People can be invited by username (if they already have an account
+  // with one set) or by email (which also works for someone who hasn't
+  // signed up yet -- their invite just sits pending until they do).
+  // bom_shares is still keyed on email under the hood either way, since
+  // that's the only identifier guaranteed to exist for a not-yet-registered
+  // invitee.
+  let email;
+  let matchedUserId = null;
+  const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+  if (looksLikeEmail) {
+    email = normalizeEmail(identifier);
+  } else {
+    const byUsername = await pool.query(
+      "SELECT id, email FROM users WHERE lower(username) = lower($1)",
+      [identifier]
+    );
+    if (!byUsername.rows[0]) {
+      return res.status(404).json({ error: "No account found with that username" });
+    }
+    matchedUserId = byUsername.rows[0].id;
+    email = normalizeEmail(byUsername.rows[0].email);
+  }
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ error: "A valid email is required" });
+    return res.status(400).json({ error: "A valid username or email is required" });
   }
   const role = validateBody(() => optionalEnum(req.body?.role, "role", ["viewer", "editor"]), res);
   if (res.locals.validationFailed) return;
@@ -348,7 +374,9 @@ bomsRouter.post("/:id/shares", shareInviteLimiter, asyncHandler(async (req, res)
     return res.status(400).json({ error: "This BOM's owner already has full access" });
   }
 
-  const matchingUser = await pool.query("SELECT id FROM users WHERE lower(email) = $1", [email]);
+  const matchingUser = matchedUserId
+    ? { rows: [{ id: matchedUserId }] }
+    : await pool.query("SELECT id FROM users WHERE lower(email) = $1", [email]);
   const result = await pool.query(
     `INSERT INTO bom_shares (bom_id, email, user_id, role, invited_by)
      VALUES ($1, $2, $3, $4, $5)

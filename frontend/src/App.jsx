@@ -79,6 +79,7 @@ export default function App() {
   const [showApiModal, setShowApiModal] = useState(false);
   const [showApifyKeyModal, setShowApifyKeyModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const shareButtonRef = useRef(null);
   const [accessDeniedNotice, setAccessDeniedNotice] = useState(null);
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
@@ -1520,7 +1521,8 @@ export default function App() {
             <div className="bom-toolbar" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
               {bom.role === "owner" && (
                 <button
-                  onClick={() => setShowShareModal(true)}
+                  ref={shareButtonRef}
+                  onClick={() => setShowShareModal((v) => !v)}
                   title="Share this BOM"
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 6,
@@ -1662,6 +1664,7 @@ export default function App() {
               <ShareModal
                 bom={bom}
                 theme={theme}
+                anchorRef={shareButtonRef}
                 onClose={() => setShowShareModal(false)}
               />
             )}

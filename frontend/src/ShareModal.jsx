@@ -1,8 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconTrash } from "./Icons.jsx";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function RoleSelect({ value, onChange, theme, disabled }) {
   return (
@@ -22,12 +20,16 @@ function RoleSelect({ value, onChange, theme, disabled }) {
   );
 }
 
-// Owner-only: invite people by email (viewer/editor), manage existing
-// shares, and set the "anyone with the link" access level. Only ever
-// rendered when bom.role === "owner" -- the backend also enforces this
-// independently, so this modal being reachable isn't itself a trust
+// Owner-only: invite people by username or email (viewer/editor), manage
+// existing shares, and set the "anyone with the link" access level. Only
+// ever rendered when bom.role === "owner" -- the backend also enforces
+// this independently, so this modal being reachable isn't itself a trust
 // boundary.
-export default function ShareModal({ bom, theme, onClose }) {
+//
+// Rendered as a popover anchored to the Share button (via anchorRef)
+// rather than a centered, dimmed-overlay modal -- it's a quick, contextual
+// action, not something that needs to take over the whole screen.
+export default function ShareModal({ bom, theme, onClose, anchorRef }) {
   const [shares, setShares] = useState(null);
   const [publicAccess, setPublicAccess] = useState(bom.public_access || "private");
   const [loading, setLoading] = useState(true);
@@ -41,7 +43,55 @@ export default function ShareModal({ bom, theme, onClose }) {
   const [linkCopied, setLinkCopied] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
 
+  const popoverRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
   const shareLink = `${window.location.origin}/sheet/${bom.id}`;
+
+  // Position the popover just under the Share button, flipping to stay
+  // on-screen near the right/bottom edges instead of overflowing.
+  useLayoutEffect(() => {
+    function place() {
+      const anchor = anchorRef?.current;
+      const popover = popoverRef.current;
+      if (!anchor) return;
+      const a = anchor.getBoundingClientRect();
+      const width = popover?.offsetWidth || 380;
+      const height = popover?.offsetHeight || 420;
+      const margin = 10;
+      let left = a.left;
+      if (left + width + margin > window.innerWidth) left = Math.max(margin, window.innerWidth - width - margin);
+      let top = a.bottom + 8;
+      if (top + height + margin > window.innerHeight) top = Math.max(margin, a.top - height - 8);
+      setPos({ top, left });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, shares, publicAccess]);
+
+  useEffect(() => {
+    function onKeyDown(e) { if (e.key === "Escape") onClose(); }
+    function onClickOutside(e) {
+      if (popoverRef.current?.contains(e.target)) return;
+      if (anchorRef?.current?.contains(e.target)) return;
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    // Capture phase + a microtask delay so the click that opened the
+    // popover (on the Share button) doesn't immediately close it again.
+    const t = setTimeout(() => document.addEventListener("mousedown", onClickOutside, true), 0);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onClickOutside, true);
+    };
+  }, [onClose, anchorRef]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,9 +112,9 @@ export default function ShareModal({ bom, theme, onClose }) {
   useEffect(() => { load(); }, [load]);
 
   async function invite() {
-    const email = inviteEmail.trim().toLowerCase();
-    if (!EMAIL_RE.test(email)) {
-      setInviteError("Enter a valid email address");
+    const identifier = inviteEmail.trim();
+    if (!identifier) {
+      setInviteError("Enter a username or email address");
       return;
     }
     setInviting(true);
@@ -73,7 +123,7 @@ export default function ShareModal({ bom, theme, onClose }) {
       const res = await apiFetch(`${API_URL}/api/boms/${bom.id}/shares`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role: inviteRole }),
+        body: JSON.stringify({ identifier, role: inviteRole }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -132,22 +182,26 @@ export default function ShareModal({ bom, theme, onClose }) {
 
   return (
     <div
-      onClick={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
       }}
     >
       <div
+        ref={popoverRef}
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "100%", maxWidth: 520, maxHeight: "85vh", overflowY: "auto",
-          background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 28,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.3)", fontFamily: "sans-serif",
+          position: "fixed",
+          top: pos?.top ?? -9999, left: pos?.left ?? -9999,
+          visibility: pos ? "visible" : "hidden",
+          width: 380, maxWidth: "calc(100vw - 20px)", maxHeight: "80vh", overflowY: "auto",
+          background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 20,
+          border: `1px solid ${theme.border}`,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.28)", fontFamily: "sans-serif",
+          pointerEvents: "auto",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <h3 style={{ margin: 0, fontSize: 17 }}>Share "{bom.title}"</h3>
+          <h3 style={{ margin: 0, fontSize: 15.5 }}>Share "{bom.title}"</h3>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -156,16 +210,16 @@ export default function ShareModal({ bom, theme, onClose }) {
             ✕
           </button>
         </div>
-        <p style={{ fontSize: 13, color: theme.subtleText, margin: "0 0 18px", lineHeight: 1.5 }}>
+        <p style={{ fontSize: 12.5, color: theme.subtleText, margin: "0 0 16px", lineHeight: 1.5 }}>
           Viewers can see this BOM but not change it. Editors can add, edit, and delete rows and sections,
           but can't manage sharing or delete the BOM itself — only you can do that.
         </p>
 
-        {/* Invite by email */}
+        {/* Invite by username or email */}
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <input
-            type="email"
-            placeholder="Email address"
+            type="text"
+            placeholder="Username or email"
             value={inviteEmail}
             onChange={(e) => setInviteEmail(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !inviting && invite()}
@@ -175,18 +229,18 @@ export default function ShareModal({ bom, theme, onClose }) {
             }}
           />
           <RoleSelect value={inviteRole} onChange={setInviteRole} theme={theme} disabled={inviting} />
-          <button
-            onClick={invite}
-            disabled={inviting || !inviteEmail.trim()}
-            style={{
-              border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700,
-              cursor: inviting ? "default" : "pointer", background: theme.accent, color: theme.accentText,
-              opacity: inviting || !inviteEmail.trim() ? 0.6 : 1, whiteSpace: "nowrap",
-            }}
-          >
-            {inviting ? "Sharing…" : "Share"}
-          </button>
         </div>
+        <button
+          onClick={invite}
+          disabled={inviting || !inviteEmail.trim()}
+          style={{
+            width: "100%", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700,
+            cursor: inviting ? "default" : "pointer", background: theme.accent, color: theme.accentText,
+            opacity: inviting || !inviteEmail.trim() ? 0.6 : 1, whiteSpace: "nowrap", marginBottom: 8,
+          }}
+        >
+          {inviting ? "Sharing…" : "Share"}
+        </button>
         {inviteError && (
           <div style={{ fontSize: 12, color: theme.error || "#ff6b6b", marginBottom: 10 }}>{inviteError}</div>
         )}
@@ -213,10 +267,10 @@ export default function ShareModal({ bom, theme, onClose }) {
                 >
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {s.email}
+                      {s.username ? `@${s.username}` : s.email}
                     </div>
-                    <div style={{ fontSize: 11, color: theme.muted }}>
-                      {s.accepted_at ? "Accepted" : "Invited — hasn't opened it yet"}
+                    <div style={{ fontSize: 11, color: theme.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {s.username ? `${s.email} · ` : ""}{s.accepted_at ? "Accepted" : "Invited — hasn't opened it yet"}
                     </div>
                   </div>
                   <RoleSelect value={s.role} onChange={(r) => updateShareRole(s.id, r)} theme={theme} />
