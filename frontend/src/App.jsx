@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { API_URL, apiFetch } from "./api.js";
+import { API_URL, apiFetch, resetCsrfToken } from "./api.js";
 import Footer from "./Footer.jsx";
 import PrivacyModal from "./PrivacyModal.jsx";
 import SettingsMenu from "./SettingsMenu.jsx";
@@ -386,13 +386,25 @@ export default function App() {
   }
 
   function toggleTheme() {
-    // Suppress hover/focus transitions for the single theme-change frame.
-    // With 200+ rows, animating every border/background during a theme switch
-    // is much more expensive than applying the new CSS variables immediately.
+    // Suppress the expensive hover/focus/transform transitions during a
+    // theme switch (animating border/box-shadow/transform on 200+ rows is
+    // costly) while still letting background-color/color fade smoothly --
+    // see the ".bom-theme-switching" rule in global.css, which runs a
+    // 160ms fade.
+    //
+    // This class needs to stay on `html` for at least as long as that
+    // fade, or the browser cancels the transition mid-flight and the color
+    // change looks like an instant snap instead of a fade. It used to be
+    // removed after two requestAnimationFrame callbacks (~32ms) -- far
+    // short of the 160ms transition it enables -- which is why the fade
+    // never actually appeared. Matching the timeout to the CSS duration
+    // (plus a small buffer) lets the transition finish before it's turned
+    // back off.
     document.documentElement.classList.add("bom-theme-switching");
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (toggleTheme._clearTimer) clearTimeout(toggleTheme._clearTimer);
+    toggleTheme._clearTimer = setTimeout(() => {
       document.documentElement.classList.remove("bom-theme-switching");
-    }));
+    }, 220);
     setThemeName((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       persistThemeName(next);
@@ -422,10 +434,15 @@ export default function App() {
   }, []);
 
 
-  async function logout() {
+  async function logout({ redirectToLogin = false } = {}) {
     try {
       await apiFetch(`${API_URL}/api/auth/logout`, { method: "POST" });
     } catch {}
+    // Reset the cached CSRF token: it's tied to the session that just ended,
+    // so keeping it around would make the *next* login's first mutation
+    // (e.g. deleting a table) fail with a 403 until something happened to
+    // force a refetch.
+    resetCsrfToken();
     setToken(null);
     setUser(null);
     setBom(null);
@@ -436,11 +453,16 @@ export default function App() {
     setOnboardingToken(null);
     try { sessionStorage.removeItem("bom-onboarding-token"); } catch {}
     setAccountSettings(false);
+    if (redirectToLogin) {
+      setMode("login");
+      setLanding(false);
+      window.history.replaceState({}, "", "/login");
+    }
   }
 
   // Security: sign the person out after 3h with no activity in any tab,
   // even though the underlying session cookie is valid for much longer.
-  useInactivityLogout(!!token, logout);
+  useInactivityLogout(!!token, () => logout({ redirectToLogin: true }));
 
   // On load, ask the API whether the HttpOnly session cookie is still valid.
   useEffect(() => {

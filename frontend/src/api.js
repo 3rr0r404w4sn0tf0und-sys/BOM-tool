@@ -14,8 +14,19 @@ export function getCsrfToken() {
   return csrfToken;
 }
 
-async function ensureCsrfToken() {
-  if (csrfToken) return csrfToken;
+// Called on logout (and should be called on any session change) so a stale
+// token from the previous session is never reused. The token is an HMAC of
+// the session id server-side, so a new session always needs a fresh fetch --
+// without this reset, re-logging in inside the same tab silently keeps
+// sending the old session's token and every mutation 403s.
+export function resetCsrfToken() {
+  csrfToken = "";
+  csrfPromise = null;
+}
+
+async function ensureCsrfToken(forceRefresh = false) {
+  if (csrfToken && !forceRefresh) return csrfToken;
+  if (forceRefresh) csrfToken = "";
   if (!csrfPromise) {
     csrfPromise = fetch(`${API_URL}/api/auth/csrf`, { credentials: "include" })
       .then(async (res) => {
@@ -32,15 +43,14 @@ async function ensureCsrfToken() {
 
 export async function apiFetch(path, options = {}) {
   const { timeoutMs: requestedTimeout, signal: externalSignal, skipCsrf = false, ...fetchOptions } = options;
-  const headers = new Headers(fetchOptions.headers || {});
   const method = (fetchOptions.method || "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method) && !skipCsrf) {
-    headers.set("X-CSRF-Token", await ensureCsrfToken());
-  }
+  const isMutation = !["GET", "HEAD", "OPTIONS"].includes(method);
   const timeoutMs = requestedTimeout ?? (fetchOptions.body instanceof FormData ? 60_000 : 15_000);
   const requestUrl = /^https?:\/\//i.test(path) ? path : `${API_URL}${path}`;
 
-  const perform = () => {
+  const perform = (csrfHeader) => {
+    const headers = new Headers(fetchOptions.headers || {});
+    if (csrfHeader) headers.set("X-CSRF-Token", csrfHeader);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let removeExternal = null;
@@ -62,12 +72,27 @@ export async function apiFetch(path, options = {}) {
     });
   };
 
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+  if (isMutation) {
+    const runMutation = async () => {
+      const token = skipCsrf ? null : await ensureCsrfToken();
+      let response = await perform(token);
+      // A 403 here almost always means the cached CSRF token belongs to a
+      // session that's no longer current (e.g. logged out and back in, or
+      // an expired session was silently refreshed) rather than an actual
+      // forgery attempt. Force a fresh token once and retry transparently
+      // instead of leaving the mutation (e.g. a delete) silently failing.
+      if (!skipCsrf && response.status === 403) {
+        const retryToken = await ensureCsrfToken(true);
+        response = await perform(retryToken);
+      }
+      return response;
+    };
+
     // Serialize mutations globally so rapid edits and undo/redo are committed
     // in the same order the user issued them. Failed optimistic mutations are
     // reconciled by App via the event below.
     const previous = apiFetch._mutationQueue || Promise.resolve();
-    const current = previous.catch(() => {}).then(perform);
+    const current = previous.catch(() => {}).then(runMutation);
     apiFetch._mutationQueue = current.catch(() => {});
     const response = await current;
     if (!response.ok && typeof window !== "undefined") {

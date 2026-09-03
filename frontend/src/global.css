@@ -209,6 +209,18 @@ body::after {
 
 input, textarea, select { transition: border-color 160ms ease, box-shadow 180ms ease, background-color 180ms ease; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--bom-accent) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bom-accent) 16%, transparent) !important; }
+
+/* Buttons had no custom focus styling, so clicking one (e.g. a toolbar
+   button, Undo/Redo, Delete) left the browser's default focus ring showing
+   -- a stark white/blue outline that reads as a rendering glitch on the
+   dark theme. Give keyboard focus a themed ring, and suppress it entirely
+   for mouse/touch clicks via :focus-visible so it only shows up when it's
+   actually useful (tabbing through the toolbar). */
+button:focus { outline: none; }
+button:focus-visible {
+  outline: 2px solid var(--bom-accent);
+  outline-offset: 2px;
+}
 button, a { -webkit-tap-highlight-color: transparent; }
 button { font: inherit; }
 ::selection { background: color-mix(in srgb, var(--bom-accent) 35%, transparent); }
