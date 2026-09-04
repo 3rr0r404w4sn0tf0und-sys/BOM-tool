@@ -80,6 +80,7 @@ export default function App() {
   const [showApifyKeyModal, setShowApifyKeyModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const shareButtonRef = useRef(null);
+  const apiButtonRef = useRef(null);
   const [accessDeniedNotice, setAccessDeniedNotice] = useState(null);
   const [sheetImporting, setSheetImporting] = useState(false);
   const [sheetImportError, setSheetImportError] = useState(null);
@@ -1571,7 +1572,8 @@ export default function App() {
               )}
               {bom.doc_type !== "sheet" && bom.role === "owner" && (
                 <button
-                  onClick={() => setShowApiModal(true)}
+                  ref={apiButtonRef}
+                  onClick={() => setShowApiModal((v) => !v)}
                   title="API access"
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 6,
@@ -1674,6 +1676,7 @@ export default function App() {
               <ApiModal
                 bom={bom}
                 theme={theme}
+                anchorRef={apiButtonRef}
                 onClose={() => setShowApiModal(false)}
                 onKeyRegenerated={(updated) => {
                   setBom((prev) => (prev ? { ...prev, public_api_key: updated.public_api_key } : prev));

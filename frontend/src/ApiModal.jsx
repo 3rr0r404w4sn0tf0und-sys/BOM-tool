@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useLayoutEffect, useEffect } from "react";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
 
@@ -91,12 +91,15 @@ function CopyCodeButton({ label, getCode, theme }) {
   );
 }
 
-export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
+export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchorRef }) {
   const [regenerating, setRegenerating] = useState(false);
   const [confirmingRegen, setConfirmingRegen] = useState(false);
   const [regenError, setRegenError] = useState(null);
 
   const [keyRevealed, setKeyRevealed] = useState(false);
+
+  const popoverRef = useRef(null);
+  const [pos, setPos] = useState(null);
 
   const key = bom.public_api_key;
   const hasKey = !!key;
@@ -110,6 +113,53 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
     ? `<iframe src="${htmlLinksUrl}" style="width:100%;border:none;min-height:600px;" title="${bom.title.replace(/"/g, "&quot;")} BOM (links)"></iframe>`
     : "";
   const maskedKey = hasKey ? "•".repeat(Math.min(key.length, 40)) : "";
+
+  // Position the popover just under the API button, anchored to it exactly
+  // like the Share popover -- flips to stay on-screen near the right/bottom
+  // edges instead of overflowing. Previously this rendered as a full-screen
+  // centered modal unrelated to the button that opened it.
+  useLayoutEffect(() => {
+    function place() {
+      const anchor = anchorRef?.current;
+      const popover = popoverRef.current;
+      if (!anchor) return;
+      const a = anchor.getBoundingClientRect();
+      const width = popover?.offsetWidth || 560;
+      const height = popover?.offsetHeight || 480;
+      const margin = 10;
+      let left = a.left;
+      if (left + width + margin > window.innerWidth) left = Math.max(margin, window.innerWidth - width - margin);
+      let top = a.bottom + 8;
+      if (top + height + margin > window.innerHeight) top = Math.max(margin, a.top - height - 8);
+      setPos({ top, left });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyRevealed, confirmingRegen, regenError]);
+
+  useEffect(() => {
+    function onKeyDown(e) { if (e.key === "Escape") onClose(); }
+    function onClickOutside(e) {
+      if (popoverRef.current?.contains(e.target)) return;
+      if (anchorRef?.current?.contains(e.target)) return;
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    // Capture phase + a microtask delay so the click that opened the
+    // popover (on the API button) doesn't immediately close it again.
+    const t = setTimeout(() => document.addEventListener("mousedown", onClickOutside, true), 0);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      clearTimeout(t);
+      document.removeEventListener("mousedown", onClickOutside, true);
+    };
+  }, [onClose, anchorRef]);
 
   async function regenerateKey() {
     setRegenerating(true);
@@ -132,10 +182,8 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
 
   return (
     <div
-      onClick={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
       }}
     >
       {/* Dark, thin scrollbars for the horizontally-scrolling code/url rows
@@ -149,12 +197,18 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated }) {
         .bom-api-modal-scroll { scrollbar-width: thin; scrollbar-color: ${theme.border} transparent; }
       `}</style>
       <div
+        ref={popoverRef}
         onClick={(e) => e.stopPropagation()}
         className="bom-api-modal-scroll"
         style={{
-          width: "100%", maxWidth: 560, maxHeight: "85vh", overflowY: "auto",
+          position: "fixed",
+          top: pos?.top ?? -9999, left: pos?.left ?? -9999,
+          visibility: pos ? "visible" : "hidden",
+          width: 560, maxWidth: "calc(100vw - 20px)", maxHeight: "80vh", overflowY: "auto",
           background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 28,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.3)", fontFamily: "sans-serif",
+          border: `1px solid ${theme.border}`,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.28)", fontFamily: "sans-serif",
+          pointerEvents: "auto",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
