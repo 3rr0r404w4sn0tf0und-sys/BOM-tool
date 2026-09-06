@@ -16,17 +16,13 @@ Two optimizations over the old per-item loop:
    negotiation overhead before it even loads the first page, so this is
    what actually cuts the wait down on a BOM with a lot of items.
 
-Amazon items go through the Apify Amazon Actor and keep their last
-known price on failure, flagged stale. Mouser items try the dedicated
-Mouser Actor first, then the generic Apify Puppeteer scrape for
-whatever's left over, and also keep their last known price on failure,
-flagged stale. Everything else ("other") uses the plain get_price()
-scraper (same as the nightly job) and clears its price on failure, same
-as that job does.
-
-No local Playwright/Puppeteer fallback anymore -- it duplicated what
-the Apify actors already handle more reliably, and was slow on top of
-that.
+Amazon items go through the Apify Amazon Actor, Mouser items through
+the dedicated Mouser Actor, and Etsy items through the dedicated Etsy
+Actor -- each keeps its last known price on failure, flagged stale.
+Everything else ("other") uses the plain get_price() scraper (same as
+the nightly job) and clears its price on failure, same as that job
+does. There is no further fallback for any of these -- Apify's generic
+Puppeteer Actor (and local Playwright) were removed entirely.
 """
 
 import os
@@ -46,7 +42,6 @@ if _job_id_for_token_fetch:
 
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape_batch
-from apify_generic_scrape import try_apify_generic_scrape_batch
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
 from apify_etsy_scrape import try_apify_etsy_scrape_batch
 
@@ -130,11 +125,6 @@ def main():
     if mouser_rows:
         mouser_urls = [r["url"] for r in mouser_rows]
         mouser_results = try_apify_mouser_scrape_batch(mouser_urls)
-        leftover = [u for u in mouser_urls if not mouser_results.get(u, {}).get("found")]
-        if leftover:
-            print(f"Dedicated Mouser Actor found {len(mouser_urls) - len(leftover)}/{len(mouser_urls)}; "
-                  f"trying generic Apify scrape for the remaining {len(leftover)}")
-            mouser_results.update(try_apify_generic_scrape_batch(leftover))
         print(f"Mouser: {sum(1 for u in mouser_urls if mouser_results.get(u, {}).get('found'))}/{len(mouser_urls)} prices found")
         for u in mouser_urls:
             if not mouser_results.get(u, {}).get("found"):
@@ -144,11 +134,6 @@ def main():
     if etsy_rows:
         etsy_urls = [r["url"] for r in etsy_rows]
         etsy_results = try_apify_etsy_scrape_batch(etsy_urls)
-        leftover = [u for u in etsy_urls if not etsy_results.get(u, {}).get("found")]
-        if leftover:
-            print(f"Dedicated Etsy Actor found {len(etsy_urls) - len(leftover)}/{len(etsy_urls)}; "
-                  f"trying generic Apify scrape for the remaining {len(leftover)}")
-            etsy_results.update(try_apify_generic_scrape_batch(leftover))
         print(f"Etsy: {sum(1 for u in etsy_urls if etsy_results.get(u, {}).get('found'))}/{len(etsy_urls)} prices found")
         for u in etsy_urls:
             if not etsy_results.get(u, {}).get("found"):

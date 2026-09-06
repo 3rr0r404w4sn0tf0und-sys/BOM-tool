@@ -15,12 +15,14 @@ Also skips anything checked in the last 3 days, so a person manually
 refreshing "Other items" earlier today doesn't get re-scraped for free
 by this job a few hours later.
 
-Sites that need Apify's generic Puppeteer Actor (Arrow -- confirmed to
-block a plain HTTP fetch) are batched into ONE Actor run instead of one
-run per item. Everything else uses the plain HTTP fast path in
-scrape_logic.get_price() -- no local Playwright/Puppeteer fallback
-anymore, since it duplicated what the Apify actors already handle more
-reliably for the sites that actually need JS rendering.
+Everything here goes through the plain HTTP fast path in
+scrape_logic.get_price() -- there is no Apify/Puppeteer/Playwright
+fallback for anything in this nightly run anymore (removed at the
+user's request). Note this means arrow.com items, which previously
+routed through Apify's generic Puppeteer Actor here because a plain
+fetch was confirmed to get WAF-blocked, will now likely come back
+price_not_found until/unless a dedicated Arrow Actor is added the same
+way Mouser and Etsy have one.
 """
 
 import os
@@ -29,15 +31,6 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from scrape_logic import get_price
-from apify_generic_scrape import try_apify_generic_scrape_batch
-from secret_crypto import decrypt_secret
-
-# Keep in sync with actions_scrape_one.py -- domains confirmed to block a
-# plain HTTP fetch, routed through Apify's generic Puppeteer Actor
-# instead. (Mouser is excluded from the query below entirely, since it
-# now has its own dedicated weekly job with its own Actor -- this list
-# only matters for the remaining domains, e.g. Arrow.)
-APIFY_GENERIC_DOMAINS = ("arrow.com",)
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
@@ -48,11 +41,8 @@ def main():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Join through to the BOM owner so Apify-routed items (Arrow) can be
-    # billed against each owner's own token instead of one shared one --
-    # there is no site-wide APIFY_TOKEN secret anymore.
     cur.execute(
-        f"""SELECT items.id, items.url, boms.user_id FROM items
+        f"""SELECT items.id, items.url FROM items
            JOIN sections ON items.section_id = sections.id
            JOIN boms ON sections.bom_id = boms.id
            WHERE items.url IS NOT NULL AND items.url != ''
@@ -72,67 +62,38 @@ def main():
         print("Nothing to do.")
         return
 
-    apify_rows = [r for r in rows if any(d in r["url"] for d in APIFY_GENERIC_DOMAINS)]
-    plain_rows = [r for r in rows if r not in apify_rows]
-
-    results = {}
-
-    if apify_rows:
-        # Group by BOM owner so each owner's Apify credits pay for their
-        # own items only, using their own saved token. Owners with no
-        # token saved simply get "Apify not configured" for their Arrow
-        # items, same as any other missing-token case.
-        by_owner = {}
-        for r in apify_rows:
-            by_owner.setdefault(r["user_id"], []).append(r["url"])
-
-        for user_id, urls in by_owner.items():
-            cur.execute("SELECT apify_token_encrypted FROM users WHERE id = %s", (user_id,))
-            row = cur.fetchone()
-            token = decrypt_secret(row["apify_token_encrypted"]) if row else None
-            results.update(try_apify_generic_scrape_batch(urls, apify_token=token))
-
     refreshed = 0
     failed = 0
 
-    def apply_result(item_id, result):
-        nonlocal refreshed
-        if result.get("found"):
-            cur.execute(
-                """UPDATE items
-                   SET unit_price = %s, status = 'ok', source = %s, last_checked = now()
-                   WHERE id = %s AND scrape_job_id = %s""",
-                (result["price"], result.get("source"), item_id, job_id),
-            )
-        else:
-            status = (
-                "link_failed"
-                if "link_failed" in (result.get("error") or "").lower()
-                else "price_not_found"
-            )
-            cur.execute(
-                """UPDATE items
-                   SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), scrape_job_id = NULL
-                   WHERE id = %s AND scrape_job_id = %s""",
-                (status, item_id, job_id),
-            )
-        refreshed += 1
-
-    for row in apify_rows:
-        item_id, url = row["id"], row["url"]
-        result = results.get(url, {"found": False, "error": "no result returned"})
-        apply_result(item_id, result)
-
-    for row in plain_rows:
+    for row in rows:
         item_id, url = row["id"], row["url"]
         try:
             result = get_price(url)
-            apply_result(item_id, result)
+            if result.get("found"):
+                cur.execute(
+                    """UPDATE items
+                       SET unit_price = %s, status = 'ok', source = %s, last_checked = now()
+                       WHERE id = %s AND scrape_job_id = %s""",
+                    (result["price"], result.get("source"), item_id, job_id),
+                )
+            else:
+                status = (
+                    "link_failed"
+                    if "link_failed" in (result.get("error") or "").lower()
+                    else "price_not_found"
+                )
+                cur.execute(
+                    """UPDATE items
+                       SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), scrape_job_id = NULL
+                       WHERE id = %s AND scrape_job_id = %s""",
+                    (status, item_id, job_id),
+                )
+            refreshed += 1
         except Exception as e:
             print(f"Failed to refresh item {item_id}: {e}", file=sys.stderr)
             cur.execute(
                 "UPDATE items SET status = 'link_failed', last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
-                (item_id,),
+                (item_id, job_id),
             )
             failed += 1
 

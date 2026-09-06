@@ -22,29 +22,30 @@ if _job_id_for_token_fetch:
 
 from scrape_logic import get_price
 from apify_scrape import try_apify_scrape
-from apify_generic_scrape import try_apify_generic_scrape
 from apify_mouser_scrape import try_apify_mouser_scrape
 from apify_etsy_scrape import try_apify_etsy_scrape
 
-# Domains confirmed to block/starve a plain HTTP fetch -- these route
-# through Apify's generic Puppeteer Actor instead. Add to this list as
-# new domains are confirmed to have the same problem; don't add
-# speculatively, since each Apify call costs credits.
-APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
-
-# mouser.com specifically has a dedicated Actor (crawloop/mouser-product-
-# scraper) that talks to Mouser's own data layer instead of screen-
-# scraping the rendered page -- more reliable than the generic Puppeteer
-# path below, which can still get WAF-blocked even from Apify's own
-# infrastructure. Tried first for Mouser; falls back to the generic path,
-# then the plain HTTP fast path as a last resort, same as every other
-# route here.
+# mouser.com has a dedicated Actor (crawloop/mouser-product-scraper) that
+# talks to Mouser's own data layer instead of screen-scraping the
+# rendered page -- sidesteps the Akamai block that a plain HTTP fetch
+# hits. Tried first for Mouser; falls back to the plain HTTP fast path
+# as a last resort (won't get through, but costs nothing to try).
 APIFY_MOUSER_DOMAINS = ("mouser.com",)
 
 # etsy.com also 403s a plain HTTP fetch (confirmed via a real on-demand
 # scrape attempt), so it gets the same dedicated-Actor-first treatment
 # as Mouser.
 APIFY_ETSY_DOMAINS = ("etsy.com",)
+
+# NOTE: arrow.com previously routed through Apify's generic Puppeteer
+# Actor here (removed at the user's request, along with the rest of the
+# Puppeteer/Playwright pipeline -- see apify_generic_scrape.py's git
+# history / actions_scrape_captcha.py, both deleted). Arrow now falls
+# through to the plain HTTP fast path below like anything else with no
+# dedicated Actor, which was previously confirmed to get blocked by
+# Arrow's WAF -- so Arrow items will likely report price_not_found
+# until/unless a dedicated Arrow Actor is added the same way Mouser and
+# Etsy have one.
 
 
 def main():
@@ -70,33 +71,18 @@ def main():
         elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_MOUSER_DOMAINS):
             # Mouser: try the dedicated Mouser Actor first (talks to
             # Mouser's own data layer, sidesteps the Akamai block
-            # entirely), then the generic Puppeteer scrape, then the
-            # plain HTTP fast path as a last resort.
+            # entirely), then the plain HTTP fast path as a last resort.
             result = try_apify_mouser_scrape(url)
             if not result.get("found"):
-                print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
-                result = try_apify_generic_scrape(url)
-            if not result.get("found"):
-                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
+                print(f"Apify Mouser scrape failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
         elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_ETSY_DOMAINS):
             # Etsy: same chain as Mouser -- plain HTTP gets a 403, so try
-            # the dedicated Etsy Actor first, then the generic Puppeteer
-            # scrape, then the plain HTTP fast path as a last resort.
+            # the dedicated Etsy Actor first, then the plain HTTP fast
+            # path as a last resort.
             result = try_apify_etsy_scrape(url)
             if not result.get("found"):
-                print(f"Apify Etsy scrape failed ({result.get('error')}), trying generic Apify scrape")
-                result = try_apify_generic_scrape(url)
-            if not result.get("found"):
-                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
-                result = get_price(url)
-        elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_GENERIC_DOMAINS):
-            # Known WAF-blocked distributor sites: try Apify's generic
-            # Puppeteer Scraper (runs from Apify's proxy IPs) first, fall
-            # back to the plain HTTP fast path.
-            result = try_apify_generic_scrape(url)
-            if not result.get("found"):
-                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
+                print(f"Apify Etsy scrape failed ({result.get('error')}), trying plain HTTP fetch")
                 result = get_price(url)
         else:
             result = get_price(url)

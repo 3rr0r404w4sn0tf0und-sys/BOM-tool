@@ -5,7 +5,7 @@ repository_dispatch client_payload (which is visible in GitHub's event
 metadata, Actions logs, and repository administration).
 
 Must be called -- and its result exported to os.environ["APIFY_TOKEN"]
--- BEFORE apify_scrape.py / apify_generic_scrape.py / apify_mouser_scrape.py
+-- BEFORE apify_scrape.py / apify_mouser_scrape.py / apify_etsy_scrape.py
 are imported, since those modules read os.environ.get("APIFY_TOKEN") once
 at import time, not per-call.
 """

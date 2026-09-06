@@ -11,12 +11,9 @@ weekly was the cadence asked for here).
    the week.
 2. Everything left goes to the dedicated Etsy Actor
    (apify_etsy_scrape.py) in ONE batched run.
-3. Anything the dedicated Actor didn't find a price for falls back to
-   ONE batched run of the generic Apify Puppeteer scrape
-   (apify_generic_scrape.py) for just the leftover urls -- same
-   fallback chain as the Mouser weekly job.
-4. Anything still not found keeps its last known price and gets
-   flagged stale_price = true, same as the Amazon/Mouser weekly jobs.
+3. Anything the dedicated Actor didn't find a price for keeps its last
+   known price and gets flagged stale_price = true, same as the
+   Amazon/Mouser weekly jobs.
 """
 
 import os
@@ -24,7 +21,6 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from apify_etsy_scrape import try_apify_etsy_scrape_batch
-from apify_generic_scrape import try_apify_generic_scrape_batch
 from secret_crypto import decrypt_secret
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
@@ -80,9 +76,7 @@ def main():
         total_leftover = sum(len(v) for v in leftover_by_owner.values())
         total_urls = sum(len(v) for v in by_owner.values())
         print(f"Dedicated Etsy Actor found {total_urls - total_leftover}/{total_urls}; "
-              f"trying generic Apify scrape for the remaining {total_leftover}")
-        for user_id, leftover in leftover_by_owner.items():
-            results.update(try_apify_generic_scrape_batch(leftover, apify_token=owner_tokens.get(user_id)))
+              f"{total_leftover} not found (no fallback scraper anymore -- keeping last known price)")
 
     refreshed = 0
     stale = 0

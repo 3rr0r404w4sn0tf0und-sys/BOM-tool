@@ -158,7 +158,11 @@ def try_apify_etsy_scrape_batch(urls: list, apify_token: str = None) -> dict:
         "startUrls": [{"url": u} for u in urls],
     }
 
-    timeout = min(120 + 15 * len(urls), 900)
+    # Real, browser-based Actors like this one can have a slow cold start
+    # (spinning up a browser + proxy) on top of actually crawling the
+    # page -- 135s (the old 120+15*1 floor) wasn't enough in practice and
+    # timed out before the Actor ever finished. Give it real headroom.
+    timeout = min(300 + 20 * len(urls), 850)
 
     try:
         resp = requests.post(endpoint, json=run_input, headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
@@ -178,6 +182,15 @@ def try_apify_etsy_scrape_batch(urls: list, apify_token: str = None) -> dict:
     except Exception as e:
         error = {"found": False, "error": f"Apify Etsy request failed: {e} (actor: {APIFY_ETSY_ACTOR_ID})"}
         return {u: error for u in urls}
+
+    if not isinstance(items, list):
+        print(f"DEBUG: Apify Etsy run-sync response wasn't a list (type: {type(items).__name__}), raw: {str(items)[:1000]}")
+        items = []
+    elif not items:
+        print(f"DEBUG: Apify Etsy Actor run succeeded but returned 0 dataset items for input urls: {urls} "
+              f"-- run_input sent: {run_input}. This usually means the Actor's startUrls matcher didn't "
+              f"recognize these URLs as valid listing/search pages (e.g. requires a slug after the listing "
+              f"id, or requires a search-page URL specifically) rather than an actual scrape failure.")
 
     results = {}
     used = set()

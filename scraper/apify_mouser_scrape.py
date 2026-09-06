@@ -1,19 +1,11 @@
 """
 Apify-based Mouser price lookup, using the purpose-built
 "crawloop/mouser-product-scraper" Actor
-(https://console.apify.com/actors/PA69eu9d2uDx1daiw/input) instead of the
-generic Puppeteer HTML-scrape in apify_generic_scrape.py.
-
-Why this is worth adding on top of apify_generic_scrape.py: that generic
-path still screen-scrapes Mouser's rendered HTML from inside an
-Apify-hosted browser -- which helps (different proxy IP than the Actions
-runner) but doesn't fully solve the problem, since Mouser's Akamai bot
-protection is known to block automated *rendered-page* scraping even
-from real browsers, regardless of whose infrastructure runs them. A
-dedicated Actor that talks to Mouser's own data layer instead of reading
-the DOM sidesteps that entirely, which is a materially different (and
-more reliable) approach for this one site -- worth trying first, with
-the existing generic Puppeteer scrape kept as the next fallback.
+(https://console.apify.com/actors/PA69eu9d2uDx1daiw/input) -- talks to
+Mouser's own data layer instead of screen-scraping the rendered page,
+which sidesteps Mouser's Akamai bot protection (known to block
+automated rendered-page scraping even from real, Apify-hosted
+browsers).
 
 There is no shared/site-wide APIFY_TOKEN secret -- each user brings their
 own Apify token (Settings -> Apify API key), passed through per-request

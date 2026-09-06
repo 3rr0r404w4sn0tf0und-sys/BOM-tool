@@ -37,5 +37,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_ENCRYPTION_KEY: ${{ secrets.SECRET_ENCRYPTION_KEY }}
           APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
-          APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
         run: python scraper/actions_refresh_mouser_weekly.py

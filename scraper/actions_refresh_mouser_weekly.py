@@ -15,15 +15,9 @@ isn't worth it.
    Mouser's own data layer instead of screen-scraping the rendered
    page, sidestepping the Akamai block, and batching cuts out the
    per-item Actor startup overhead that made this slow before.
-3. Anything the dedicated Actor didn't find a price for falls back to
-   ONE batched run of the generic Apify Puppeteer scrape
-   (apify_generic_scrape.py) for just the leftover urls.
-4. Anything still not found keeps its last known price and gets
-   flagged stale_price = true, same as the Amazon weekly job.
-
-No local Playwright/Puppeteer fallback anymore -- it duplicated what
-the Apify actors already handle more reliably, on top of adding
-per-item overhead that batching now avoids.
+3. Anything the dedicated Actor didn't find a price for keeps its
+   last known price and gets flagged stale_price = true, same as the
+   Amazon weekly job.
 """
 
 import os
@@ -31,7 +25,6 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
-from apify_generic_scrape import try_apify_generic_scrape_batch
 from secret_crypto import decrypt_secret
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
@@ -87,9 +80,7 @@ def main():
         total_leftover = sum(len(v) for v in leftover_by_owner.values())
         total_urls = sum(len(v) for v in by_owner.values())
         print(f"Dedicated Mouser Actor found {total_urls - total_leftover}/{total_urls}; "
-              f"trying generic Apify scrape for the remaining {total_leftover}")
-        for user_id, leftover in leftover_by_owner.items():
-            results.update(try_apify_generic_scrape_batch(leftover, apify_token=owner_tokens.get(user_id)))
+              f"{total_leftover} not found (no fallback scraper anymore -- keeping last known price)")
 
     refreshed = 0
     stale = 0
