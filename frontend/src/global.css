@@ -186,7 +186,7 @@ body::after {
 
 /* Existing motion language. */
 .bom-view-enter { animation: bom-view-enter 280ms cubic-bezier(.2,.8,.2,1) both; }
-@keyframes bom-view-enter { from { opacity: 0; transform: translateY(8px) scale(.995); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes bom-view-enter { from { opacity: 0; transform: translateY(8px) scale(.995); } to { opacity: 1; transform: none; } }
 .bom-list-stagger > * { animation: bom-item-in 360ms cubic-bezier(.2,.8,.2,1) both; }
 .bom-list-stagger > *:nth-child(1) { animation-delay: 20ms; }
 .bom-list-stagger > *:nth-child(2) { animation-delay: 55ms; }
@@ -327,6 +327,15 @@ a.bom-brand:hover img { transform: rotate(-6deg); }
   box-shadow: 0 8px 24px rgba(15,23,42,.055), inset 0 1px 0 rgba(255,255,255,.35);
   backdrop-filter: blur(10px) saturate(120%);
   -webkit-backdrop-filter: blur(10px) saturate(120%);
+  /* backdrop-filter above creates a stacking context. Section cards
+     right below the toolbar (.bom-section-surface, also backdrop-
+     filtered) are later in the DOM and have no z-index of their own
+     either, so without an explicit z-index here they'd win document-
+     order tiebreaking and paint OVER the toolbar -- dragging the
+     Refresh dropdown menu (z-index: 20, but scoped to the toolbar's
+     own local stacking context) behind the table with it. */
+  position: relative;
+  z-index: 5;
 }
 .bom-toolbar > * { flex-shrink: 0; }
 .bom-toolbar button { white-space: nowrap; }
