@@ -38,4 +38,5 @@ jobs:
           API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL || 'https://bom-tool-ampf.onrender.com' }}
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
+          APIFY_ETSY_ACTOR_ID: ${{ secrets.APIFY_ETSY_ACTOR_ID }}
         run: python scraper/actions_scrape_one.py

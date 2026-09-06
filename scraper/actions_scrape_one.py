@@ -24,6 +24,7 @@ from scrape_logic import get_price
 from apify_scrape import try_apify_scrape
 from apify_generic_scrape import try_apify_generic_scrape
 from apify_mouser_scrape import try_apify_mouser_scrape
+from apify_etsy_scrape import try_apify_etsy_scrape
 
 # Domains confirmed to block/starve a plain HTTP fetch -- these route
 # through Apify's generic Puppeteer Actor instead. Add to this list as
@@ -39,6 +40,11 @@ APIFY_GENERIC_DOMAINS = ("mouser.com", "arrow.com")
 # then the plain HTTP fast path as a last resort, same as every other
 # route here.
 APIFY_MOUSER_DOMAINS = ("mouser.com",)
+
+# etsy.com also 403s a plain HTTP fetch (confirmed via a real on-demand
+# scrape attempt), so it gets the same dedicated-Actor-first treatment
+# as Mouser.
+APIFY_ETSY_DOMAINS = ("etsy.com",)
 
 
 def main():
@@ -69,6 +75,17 @@ def main():
             result = try_apify_mouser_scrape(url)
             if not result.get("found"):
                 print(f"Apify Mouser scrape failed ({result.get('error')}), trying generic Apify scrape")
+                result = try_apify_generic_scrape(url)
+            if not result.get("found"):
+                print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
+                result = get_price(url)
+        elif any((urlparse(url).hostname or "").lower() == domain or (urlparse(url).hostname or "").lower().endswith("." + domain) for domain in APIFY_ETSY_DOMAINS):
+            # Etsy: same chain as Mouser -- plain HTTP gets a 403, so try
+            # the dedicated Etsy Actor first, then the generic Puppeteer
+            # scrape, then the plain HTTP fast path as a last resort.
+            result = try_apify_etsy_scrape(url)
+            if not result.get("found"):
+                print(f"Apify Etsy scrape failed ({result.get('error')}), trying generic Apify scrape")
                 result = try_apify_generic_scrape(url)
             if not result.get("found"):
                 print(f"Apify generic scrape failed ({result.get('error')}), trying plain HTTP fetch")
