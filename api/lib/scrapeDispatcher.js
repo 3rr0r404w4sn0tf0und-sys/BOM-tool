@@ -61,7 +61,8 @@ export async function triggerBatchScrape(bomId, filter) {
   let urlCondition = "";
   if (filter === "amazon") urlCondition = "AND items.url ILIKE '%amazon.%'";
   else if (filter === "mouser") urlCondition = "AND items.url ILIKE '%mouser.%'";
-  else if (filter === "other") urlCondition = "AND items.url NOT ILIKE '%amazon.%' AND items.url NOT ILIKE '%mouser.%'";
+  else if (filter === "etsy") urlCondition = "AND items.url ILIKE '%etsy.%'";
+  else if (filter === "other") urlCondition = "AND items.url NOT ILIKE '%amazon.%' AND items.url NOT ILIKE '%mouser.%' AND items.url NOT ILIKE '%etsy.%'";
 
   const pendingResult = await pool.query(
     `UPDATE items SET status = 'pending', stale_price = false, scrape_job_id = $2

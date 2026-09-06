@@ -39,4 +39,5 @@ jobs:
           APIFY_AMAZON_ACTOR_ID: ${{ secrets.APIFY_AMAZON_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
           APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
+          APIFY_ETSY_ACTOR_ID: ${{ secrets.APIFY_ETSY_ACTOR_ID }}
         run: python scraper/actions_refresh_bom_batch.py

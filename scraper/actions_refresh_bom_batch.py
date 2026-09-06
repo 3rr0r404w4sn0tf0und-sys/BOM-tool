@@ -2,9 +2,9 @@
 Entry point for .github/workflows/scrape-bom-batch.yml
 
 Scrapes every item in ONE specific BOM that matches FILTER
-("amazon" | "mouser" | "other" | "all") -- this is what the refresh
-buttons on the BOM page trigger. One repository_dispatch, one Actions
-run, instead of firing a separate dispatch per item.
+("amazon" | "mouser" | "etsy" | "other" | "all") -- this is what the
+refresh buttons on the BOM page trigger. One repository_dispatch, one
+Actions run, instead of firing a separate dispatch per item.
 
 Two optimizations over the old per-item loop:
 1. Skip anything checked in the last 3 days -- if you already refreshed
@@ -48,6 +48,7 @@ from scrape_logic import get_price
 from apify_scrape import try_apify_scrape_batch
 from apify_generic_scrape import try_apify_generic_scrape_batch
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
+from apify_etsy_scrape import try_apify_etsy_scrape_batch
 
 SKIP_IF_CHECKED_WITHIN_DAYS = 3
 
@@ -60,6 +61,11 @@ def is_amazon(url):
 def is_mouser(url):
     host = (urlparse(url).hostname or "").lower()
     return host == "mouser.com" or host.endswith(".mouser.com")
+
+
+def is_etsy(url):
+    host = (urlparse(url).hostname or "").lower()
+    return host == "etsy.com" or host.endswith(".etsy.com")
 
 
 def main():
@@ -81,10 +87,14 @@ def main():
     elif filt == "mouser":
         where += " AND items.url ILIKE %s"
         params.append("%mouser.%")
+    elif filt == "etsy":
+        where += " AND items.url ILIKE %s"
+        params.append("%etsy.%")
     elif filt == "other":
-        where += " AND items.url NOT ILIKE %s AND items.url NOT ILIKE %s"
+        where += " AND items.url NOT ILIKE %s AND items.url NOT ILIKE %s AND items.url NOT ILIKE %s"
         params.append("%amazon.%")
         params.append("%mouser.%")
+        params.append("%etsy.%")
 
     cur.execute(
         f"""SELECT items.id, items.url, items.scrape_job_id FROM items
@@ -103,7 +113,8 @@ def main():
 
     amazon_rows = [r for r in rows if is_amazon(r["url"])]
     mouser_rows = [r for r in rows if is_mouser(r["url"])]
-    other_rows = [r for r in rows if not is_amazon(r["url"]) and not is_mouser(r["url"])]
+    etsy_rows = [r for r in rows if is_etsy(r["url"])]
+    other_rows = [r for r in rows if not is_amazon(r["url"]) and not is_mouser(r["url"]) and not is_etsy(r["url"])]
 
     results = {}
 
@@ -130,10 +141,24 @@ def main():
                 print(f"  Mouser FAILED: {u} -> {mouser_results.get(u, {}).get('error', 'unknown error')}")
         results.update(mouser_results)
 
+    if etsy_rows:
+        etsy_urls = [r["url"] for r in etsy_rows]
+        etsy_results = try_apify_etsy_scrape_batch(etsy_urls)
+        leftover = [u for u in etsy_urls if not etsy_results.get(u, {}).get("found")]
+        if leftover:
+            print(f"Dedicated Etsy Actor found {len(etsy_urls) - len(leftover)}/{len(etsy_urls)}; "
+                  f"trying generic Apify scrape for the remaining {len(leftover)}")
+            etsy_results.update(try_apify_generic_scrape_batch(leftover))
+        print(f"Etsy: {sum(1 for u in etsy_urls if etsy_results.get(u, {}).get('found'))}/{len(etsy_urls)} prices found")
+        for u in etsy_urls:
+            if not etsy_results.get(u, {}).get("found"):
+                print(f"  Etsy FAILED: {u} -> {etsy_results.get(u, {}).get('error', 'unknown error')}")
+        results.update(etsy_results)
+
     refreshed = 0
     failed = 0
 
-    for row in amazon_rows + mouser_rows:
+    for row in amazon_rows + mouser_rows + etsy_rows:
         item_id, url = row["id"], row["url"]
         result = results.get(url, {"found": False, "error": "no result returned"})
         if result.get("found"):

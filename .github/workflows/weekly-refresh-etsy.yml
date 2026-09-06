@@ -1,23 +1,19 @@
-name: Mouser price refresh (weekly)
+name: Etsy price refresh (weekly)
 
 on:
   schedule:
-    # Every Monday 6 AM UTC. Previously "1,15 * *" (biweekly) despite the
-    # name/docstring saying weekly, and despite the 3-day dedupe window
-    # below only making sense for an actual weekly cadence -- fixed to
-    # match the stated intent.
-    - cron: "0 6 * * 1"
+    - cron: "0 7 * * 1"   # Every Monday 7 AM UTC -- an hour after the Mouser job so they don't compete for the same runner window
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: weekly-refresh-mouser
+  group: weekly-refresh-etsy
   cancel-in-progress: false
 
 jobs:
-  refresh-mouser:
+  refresh-etsy:
     runs-on: ubuntu-latest
     timeout-minutes: 60  # this can run long with many items + delays
 
@@ -32,10 +28,10 @@ jobs:
         run: |
           pip install -r scraper/requirements.txt
 
-      - name: Refresh Mouser item prices
+      - name: Refresh Etsy item prices
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_ENCRYPTION_KEY: ${{ secrets.SECRET_ENCRYPTION_KEY }}
-          APIFY_MOUSER_ACTOR_ID: ${{ secrets.APIFY_MOUSER_ACTOR_ID }}
+          APIFY_ETSY_ACTOR_ID: ${{ secrets.APIFY_ETSY_ACTOR_ID }}
           APIFY_PUPPETEER_ACTOR_ID: ${{ secrets.APIFY_PUPPETEER_ACTOR_ID }}
-        run: python scraper/actions_refresh_mouser_weekly.py
+        run: python scraper/actions_refresh_etsy_weekly.py

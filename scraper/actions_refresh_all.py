@@ -4,11 +4,12 @@ Entry point for .github/workflows/nightly-refresh.yml
 Connects directly to Postgres and re-scrapes every item that has a URL
 and isn't handled by a dedicated weekly job, every night. Amazon items
 are skipped here -- handled by the separate weekly job
-(actions_refresh_amazon_weekly.py). Mouser items are also skipped here
--- handled by the separate weekly job (actions_refresh_mouser_weekly.py).
-Both are pulled out of the nightly run for the same reason: they're
-expensive (Apify credits) and/or prone to getting blocked, so we don't
-want to hit them every single night.
+(actions_refresh_amazon_weekly.py). Mouser and Etsy items are also
+skipped here -- handled by their own separate weekly jobs
+(actions_refresh_mouser_weekly.py / actions_refresh_etsy_weekly.py).
+All three are pulled out of the nightly run for the same reason:
+they're expensive (Apify credits) and/or prone to getting blocked, so
+we don't want to hit them every single night.
 
 Also skips anything checked in the last 3 days, so a person manually
 refreshing "Other items" earlier today doesn't get re-scraped for free
@@ -57,6 +58,7 @@ def main():
            WHERE items.url IS NOT NULL AND items.url != ''
              AND items.url NOT ILIKE '%amazon.%'
              AND items.url NOT ILIKE '%mouser.%'
+             AND items.url NOT ILIKE '%etsy.%'
              AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()

@@ -695,7 +695,7 @@ bomsRouter.post("/:bomId/refresh-items", scrapeLimiter, asyncHandler(async (req,
     return res.status(404).json({ error: "BOM not found" });
   }
   const filter = req.body?.filter || "all";
-  if (!["amazon", "mouser", "other", "all"].includes(filter)) return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'other', or 'all'" });
+  if (!["amazon", "mouser", "etsy", "other", "all"].includes(filter)) return res.status(400).json({ error: "filter must be 'amazon', 'mouser', 'etsy', 'other', or 'all'" });
   const result = await triggerBatchScrape(req.params.bomId, filter);
   if (!result) return res.status(500).json({ error: "Failed to start batch refresh job" });
   res.json({ triggered: result.triggered, filter, job_id: result.jobId });

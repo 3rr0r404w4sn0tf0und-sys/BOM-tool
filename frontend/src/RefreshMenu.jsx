@@ -11,6 +11,7 @@ export default function RefreshMenu({ theme, refreshingFilter, onSelect }) {
     { key: "other", label: "Other items" },
     { key: "amazon", label: "Amazon items" },
     { key: "mouser", label: "Mouser items" },
+    { key: "etsy", label: "Etsy items" },
     { key: "all", label: "Everything" },
   ];
   const busyLabel = options.find((o) => o.key === refreshingFilter)?.label;
