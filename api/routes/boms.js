@@ -797,15 +797,35 @@ bomsRouter.patch("/items/:itemId", asyncHandler(async (req, res) => {
 // scrape can safely replace them when the user refreshes the product.
 bomsRouter.patch("/items/:itemId/manual-price", asyncHandler(async (req, res) => {
   if (!await getOwnedItem(req.params.itemId, req.userId)) return res.status(404).json({ error: "Item not found" });
-  const unit_price = validateBody(() => optionalNumber(req.body?.unit_price, "unit_price", { min: 0, max: 100000000000 }), res);
+  // Bound matches the unit_price column's NUMERIC(12,2) precision -- the old
+  // 100000000000 (100 billion) cap let a value through validation that
+  // Postgres would then reject with "numeric field overflow" (10 digits
+  // before the decimal point is the real limit), turning into an unhandled
+  // 500 instead of a clean 400.
+  const unit_price = validateBody(() => optionalNumber(req.body?.unit_price, "unit_price", { min: 0, max: 9999999999.99 }), res);
   if (unit_price === null && req.body?.unit_price !== undefined && req.body?.unit_price !== null) return;
-  const result = await pool.query(
-    `UPDATE items SET unit_price = $1, status = CASE WHEN $1 IS NULL THEN 'price_not_found' ELSE 'ok' END,
-       source = CASE WHEN $1 IS NULL THEN NULL ELSE 'manual' END, stale_price = false, last_checked = now()
-     WHERE id = $2 RETURNING *`,
-    [unit_price ?? null, req.params.itemId]
-  );
-  res.json(result.rows[0]);
+  try {
+    const result = await pool.query(
+      `UPDATE items SET unit_price = $1, status = CASE WHEN $1 IS NULL THEN 'price_not_found' ELSE 'ok' END,
+         source = CASE WHEN $1 IS NULL THEN NULL ELSE 'manual' END, stale_price = false, last_checked = now()
+       WHERE id = $2 RETURNING *`,
+      [unit_price ?? null, req.params.itemId]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    // Temporary diagnostic: log the exact Postgres error (code/message/detail)
+    // since the last 500 here produced nothing in Render's logs. Once we
+    // know the real cause this can go back to just `throw err`.
+    console.error("manual-price UPDATE failed:", {
+      itemId: req.params.itemId,
+      unit_price,
+      code: err.code,
+      message: err.message,
+      detail: err.detail,
+    });
+    throw err;
+  }
 }));
 
 bomsRouter.delete("/items/:itemId", asyncHandler(async (req, res) => {
