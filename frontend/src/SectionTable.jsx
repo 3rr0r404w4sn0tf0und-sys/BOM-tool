@@ -241,6 +241,13 @@ function CostCell({ item, sectionId, theme, onResolved, onSetManualPrice }) {
   const [editingPrice, setEditingPrice] = useState(false);
   const lineTotal = Number(item.unit_price) * Number(item.qty ?? 1);
   if (item.status === "ok") {
+    if (editingPrice) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+          <ManualPriceEdit item={item} sectionId={sectionId} onSetManualPrice={onSetManualPrice} theme={theme} onDone={() => setEditingPrice(false)} />
+        </div>
+      );
+    }
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
@@ -261,6 +268,19 @@ function CostCell({ item, sectionId, theme, onResolved, onSetManualPrice }) {
             </span>
           )}
         </div>
+        {/* A manually-entered price has no scraped source to fall back on if
+            it was typo'd or changes, so it needs to stay editable even after
+            it flips to "ok" -- unlike a scraped price, which shouldn't
+            invite being overwritten by accident. */}
+        {item.source === "manual" && (
+          <button
+            onClick={() => setEditingPrice(true)}
+            title="Edit manually-entered price"
+            style={{ border: "none", background: "none", cursor: "pointer", padding: 2, display: "flex", color: theme.muted }}
+          >
+            <IconPencil size={12} color={theme.muted} />
+          </button>
+        )}
         <RefreshButton item={item} theme={theme} onRefresh={onResolved} />
       </div>
     );
