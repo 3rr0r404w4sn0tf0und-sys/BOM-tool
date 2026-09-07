@@ -1,45 +1,48 @@
 """
-Apify-based Etsy price lookup, using the "Etsy Scraper" Actor
-(https://console.apify.com/actors/JOUStaVgex0lqbRnk/input), the same
-pattern as apify_mouser_scrape.py for Mouser.
+Apify-based Etsy price lookup, using the "Etsy Scraper (Listings,
+Prices, Reviews & Seller Emails)" Actor
+(https://console.apify.com/actors/PQjnABrAzaNBlmkfd/input), the same
+overall pattern as apify_mouser_scrape.py for Mouser.
 
-Unlike the Mouser Actor (which takes a `productUrls` list built for
-per-product lookups), this Actor's confirmed input shape is search-page
-oriented:
+Confirmed input shape (from the Actor's own input example):
   {
-    "country": "US",
-    "includeDetails": false,
-    "maxItems": 10,
-    "startUrls": [{"url": "https://www.etsy.com/search?q=handmade+jewelry"}]
+    "enrichEmails": false,
+    "enrichSeller": false,
+    "includeReviews": true,
+    "proxy": {"useApifyProxy": true},
+    "qualifyByPayment": false,
+    "searchQueries": ["handmade jewelry", "ceramic mug"],
+    "shopDetails": false,
+    "startUrls": [
+      "https://www.etsy.com/listing/743657804/sheepskin-slippers-wool-slippers-fur",
+      "https://www.etsy.com/c/clothing-and-shoes?ref=catnav-10923",
+      "https://www.etsy.com/search?q=apple%20watch",
+      "https://www.etsy.com/shop/PetiteFraise"
+    ]
   }
 
-`startUrls` is still just "pages to crawl" though, and Etsy listing
-pages (etsy.com/listing/<id>/...) are a valid page for the Actor to
-visit same as a search results page -- so for our use case (refreshing
-the price of specific listings already saved on a BOM), each item's
-own listing URL is passed as its own `startUrls` entry, one page in,
-one result out, same as passing a single-item search would be. This
-avoids depending on this Actor's (unconfirmed) search-result-to-query
-matching and instead matches results back to input urls the same way
-apify_mouser_scrape.py does for its dedicated Actor.
+Unlike the previous Etsy Actor, `startUrls` here is a plain array of
+URL STRINGS, not `{"url": ...}` objects -- and its own example
+explicitly includes an individual listing URL alongside search/shop/
+category URLs, confirming a bare `etsy.com/listing/<id>/<slug>` page
+is a valid direct input (which is exactly our use case: refreshing the
+price of specific listings already saved on a BOM).
 
-`includeDetails: true` is used here (unlike the example's `false`) --
-without it the Actor only returns search-card-level fields, and a
-listing page's own price is exactly what a search card would also
-carry, so this is likely unnecessary; it's turned on primarily in case
-the Actor's price field is otherwise only populated on the "details"
-pass. Cheap to leave on for a batch of listing-page urls vs a search
-term.
+Every other toggle (enrichEmails, enrichSeller, qualifyByPayment,
+shopDetails, includeReviews) is left off/false here -- they're for
+different use cases (seller contact info, payment verification, shop-
+level data, review text) that cost extra time/credits and aren't
+needed just to read a listing's price.
 
 Output schema isn't confirmed yet -- `_extract_price` below tries
 several likely field names/shapes and prints the raw item on failure
 so the real field name can be read off a live run and hard-coded in,
-same as was done for the Mouser Actor.
+same as was done for the Mouser Actor and the previous Etsy Actor.
 
 You'll need:
 1. The same Apify account/token already used for Amazon and Mouser
    (each user brings their own -- see Settings -> Apify API key).
-2. APIFY_ETSY_ACTOR_ID set to "JOUStaVgex0lqbRnk" (or the actor's
+2. APIFY_ETSY_ACTOR_ID set to "PQjnABrAzaNBlmkfd" (or the actor's
    "creator/name" slug, if you'd rather set it by name) as a GitHub
    Actions secret/variable.
 """
@@ -48,7 +51,7 @@ import os
 import requests
 
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
-APIFY_ETSY_ACTOR_ID = os.environ.get("APIFY_ETSY_ACTOR_ID", "JOUStaVgex0lqbRnk")
+APIFY_ETSY_ACTOR_ID = os.environ.get("APIFY_ETSY_ACTOR_ID", "PQjnABrAzaNBlmkfd")
 
 
 def _extract_price(item: dict):
@@ -152,10 +155,14 @@ def try_apify_etsy_scrape_batch(urls: list, apify_token: str = None) -> dict:
     )
 
     run_input = {
-        "country": "US",
-        "includeDetails": True,
-        "maxItems": len(urls),
-        "startUrls": [{"url": u} for u in urls],
+        "startUrls": list(urls),
+        "searchQueries": [],
+        "proxy": {"useApifyProxy": True},
+        "includeReviews": False,
+        "enrichEmails": False,
+        "enrichSeller": False,
+        "qualifyByPayment": False,
+        "shopDetails": False,
     }
 
     # Real, browser-based Actors like this one can have a slow cold start
