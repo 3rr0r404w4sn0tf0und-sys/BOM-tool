@@ -15,6 +15,13 @@ Also skips anything checked in the last 3 days, so a person manually
 refreshing "Other items" earlier today doesn't get re-scraped for free
 by this job a few hours later.
 
+Also skips any item whose price was set by hand via the manual-price
+override (source = 'manual') -- once someone has typed in a price for
+an item the scraper couldn't resolve, a nightly re-scrape would just
+overwrite it back to price_not_found/link_failed. It only comes back
+into rotation if the user changes the item's URL (which resets status
+to 'pending' and clears source) or hits Refresh on it manually.
+
 Everything here goes through the plain HTTP fast path in
 scrape_logic.get_price() -- there is no Apify/Puppeteer/Playwright
 fallback for anything in this nightly run anymore (removed at the
@@ -49,6 +56,7 @@ def main():
              AND items.url NOT ILIKE '%amazon.%'
              AND items.url NOT ILIKE '%mouser.%'
              AND items.url NOT ILIKE '%etsy.%'
+             AND items.source IS DISTINCT FROM 'manual'
              AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()

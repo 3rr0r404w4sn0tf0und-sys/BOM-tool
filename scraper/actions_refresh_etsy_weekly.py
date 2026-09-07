@@ -37,6 +37,7 @@ def main():
             JOIN sections ON items.section_id = sections.id
             JOIN boms ON sections.bom_id = boms.id
             WHERE items.url IS NOT NULL AND items.url != '' AND items.url ILIKE '%etsy.%'
+              AND items.source IS DISTINCT FROM 'manual'
               AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
     )
     rows = cur.fetchall()
