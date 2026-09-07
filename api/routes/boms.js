@@ -805,18 +805,20 @@ bomsRouter.patch("/items/:itemId/manual-price", asyncHandler(async (req, res) =>
   const unit_price = validateBody(() => optionalNumber(req.body?.unit_price, "unit_price", { min: 0, max: 9999999999.99 }), res);
   if (unit_price === null && req.body?.unit_price !== undefined && req.body?.unit_price !== null) return;
   try {
+    // $1 needs an explicit ::numeric cast -- every use of it below is inside
+    // a CASE/IS NULL check rather than a direct typed assignment, so
+    // Postgres has nothing to infer its type from and throws 42P08
+    // ("could not determine data type of parameter") before the query even
+    // runs. That's what was producing the unlogged-looking 500 above.
     const result = await pool.query(
-      `UPDATE items SET unit_price = $1, status = CASE WHEN $1 IS NULL THEN 'price_not_found' ELSE 'ok' END,
-         source = CASE WHEN $1 IS NULL THEN NULL ELSE 'manual' END, stale_price = false, last_checked = now()
+      `UPDATE items SET unit_price = $1::numeric, status = CASE WHEN $1::numeric IS NULL THEN 'price_not_found' ELSE 'ok' END,
+         source = CASE WHEN $1::numeric IS NULL THEN NULL ELSE 'manual' END, stale_price = false, last_checked = now()
        WHERE id = $2 RETURNING *`,
       [unit_price ?? null, req.params.itemId]
     );
     if (!result.rows[0]) return res.status(404).json({ error: "Item not found" });
     res.json(result.rows[0]);
   } catch (err) {
-    // Temporary diagnostic: log the exact Postgres error (code/message/detail)
-    // since the last 500 here produced nothing in Render's logs. Once we
-    // know the real cause this can go back to just `throw err`.
     console.error("manual-price UPDATE failed:", {
       itemId: req.params.itemId,
       unit_price,
