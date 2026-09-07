@@ -200,6 +200,26 @@ export default function App() {
     history.push({ undo: () => apply(before), redo: () => apply(patch) });
   }, [jsonHeaders, setSections, history]);
 
+  const setManualPrice = useCallback((sectionId, itemId, unitPrice) => {
+    const section = bomRef.current.sections.find((s) => s.id === sectionId);
+    const item = section?.items.find((i) => i.id === itemId);
+    if (!item) return;
+    const before = { unit_price: item.unit_price, status: item.status, source: item.source, stale_price: item.stale_price };
+    const after = { unit_price: unitPrice, status: "ok", source: "manual", stale_price: false };
+
+    function apply(p) {
+      setSections((sections) => sections.map((s) => (s.id !== sectionId ? s : { ...s, items: s.items.map((i) => (i.id === itemId ? { ...i, ...p } : i)) })));
+      // Dedicated endpoint -- unit_price/status/source/stale_price are
+      // deliberately NOT accepted by the general item PATCH route (so
+      // scraper-owned fields can't be forged through it), so a manual
+      // price edit has to go through its own endpoint instead of
+      // patchItem() above.
+      apiFetch(`${API_URL}/api/boms/items/${itemId}/manual-price`, { method: "PATCH", headers: jsonHeaders(), body: JSON.stringify({ unit_price: p.unit_price }) });
+    }
+    apply(after);
+    history.push({ undo: () => apply(before), redo: () => apply(after) });
+  }, [jsonHeaders, setSections, history]);
+
   const reorderItems = useCallback((sectionId, orderedIds) => {
     const section = bomRef.current.sections.find((s) => s.id === sectionId);
     const prevOrder = section.items.map((i) => i.id);
@@ -1748,6 +1768,7 @@ export default function App() {
                   onAddRow={addRow}
                   onDeleteRow={deleteRow}
                   onPatchItem={patchItem}
+                  onSetManualPrice={setManualPrice}
                   onReorderItems={reorderItems}
                   onRenameSection={renameSection}
                   onChangeEmoji={setSectionEmoji}

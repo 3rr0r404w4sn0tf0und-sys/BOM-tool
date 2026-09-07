@@ -34,6 +34,14 @@ different use cases (seller contact info, payment verification, shop-
 level data, review text) that cost extra time/credits and aren't
 needed just to read a listing's price.
 
+The `proxy` field is forced to `useApifyProxy: false` in the actual
+run_input below -- leaving it on (even with a group specified) let it
+fall back to Residential proxy on a real run, which bills per-GB
+($8/GB seen in practice) instead of as part of normal Actor compute
+cost. Fully disabling Apify proxy avoids that entirely; if Etsy starts
+blocking the Actor's outgoing IP without a proxy, that's the tradeoff
+to revisit first.
+
 Output schema isn't confirmed yet -- `_extract_price` below tries
 several likely field names/shapes and prints the raw item on failure
 so the real field name can be read off a live run and hard-coded in,
@@ -157,7 +165,7 @@ def try_apify_etsy_scrape_batch(urls: list, apify_token: str = None) -> dict:
     run_input = {
         "startUrls": list(urls),
         "searchQueries": [],
-        "proxy": {"useApifyProxy": True},
+        "proxy": {"useApifyProxy": False},
         "includeReviews": False,
         "enrichEmails": False,
         "enrichSeller": False,

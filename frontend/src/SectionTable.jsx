@@ -200,7 +200,45 @@ function RefreshButton({ item, theme, onRefresh }) {
   );
 }
 
-function CostCell({ item, theme, onResolved }) {
+function ManualPriceEdit({ item, sectionId, onSetManualPrice, theme, onDone }) {
+  const [value, setValue] = useState(item.unit_price != null ? String(item.unit_price) : "");
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+
+  function commit() {
+    const n = parseFloat(value);
+    if (Number.isFinite(n) && n >= 0) {
+      onSetManualPrice(sectionId, item.id, n);
+    }
+    onDone();
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      step="0.01"
+      min="0"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        if (e.key === "Escape") onDone();
+      }}
+      placeholder="0.00"
+      style={{
+        width: 78, fontSize: 13, textAlign: "right", padding: "3px 6px",
+        borderRadius: 6, border: `1px solid ${theme.border}`, background: theme.inputBg || theme.cardBg,
+        color: theme.text,
+      }}
+    />
+  );
+}
+
+function CostCell({ item, sectionId, theme, onResolved, onSetManualPrice }) {
+  const [editingPrice, setEditingPrice] = useState(false);
   const lineTotal = Number(item.unit_price) * Number(item.qty ?? 1);
   if (item.status === "ok") {
     return (
@@ -237,6 +275,20 @@ function CostCell({ item, theme, onResolved }) {
       </div>
     );
   }
+  // Failed statuses (price_not_found / link_failed / any other non-ok,
+  // non-pending status): scraping couldn't get a price, and now that the
+  // generic Apify fallback scraper is gone, some sites (no dedicated
+  // Actor, blocked plain fetch) will land here with no automated retry
+  // path -- so offer a manual override via the pencil icon, but only
+  // here, since a working price shouldn't invite being overwritten by
+  // accident.
+  if (editingPrice) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+        <ManualPriceEdit item={item} sectionId={sectionId} onSetManualPrice={onSetManualPrice} theme={theme} onDone={() => setEditingPrice(false)} />
+      </div>
+    );
+  }
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
       <span
@@ -245,6 +297,13 @@ function CostCell({ item, theme, onResolved }) {
       >
         <IconWarning size={12} color={theme.errText} /> failed
       </span>
+      <button
+        onClick={() => setEditingPrice(true)}
+        title="Enter price manually"
+        style={{ border: "none", background: "none", cursor: "pointer", padding: 2, display: "flex", color: theme.muted }}
+      >
+        <IconPencil size={12} color={theme.muted} />
+      </button>
       <RefreshButton item={item} theme={theme} onRefresh={onResolved} />
     </div>
   );
@@ -267,7 +326,7 @@ function CostCell({ item, theme, onResolved }) {
 const BomRow = memo(function BomRow({
   item, sectionId, isSheet, numCols, columnLabels, theme,
   dragItemId, dragOverItemId, onRowDragStart, onRowDragOver, onRowDrop,
-  onRowDragEnd, onAddRow, onDeleteRow, onPatchItem, onResolved, setRowMenu,
+  onRowDragEnd, onAddRow, onDeleteRow, onPatchItem, onSetManualPrice, onResolved, setRowMenu,
 }) {
   const defaultColLabel = (i) => `Row ${String.fromCharCode(65 + i)}`;
   const cells = Array.isArray(item.sheet_data) ? item.sheet_data : [];
@@ -351,7 +410,7 @@ const BomRow = memo(function BomRow({
               }} />
           </td>
           <td style={{ padding: "6px 8px", textAlign: "right" }}>
-            <CostCell item={item} theme={theme} onResolved={onResolved} />
+            <CostCell item={item} sectionId={sectionId} theme={theme} onResolved={onResolved} onSetManualPrice={onSetManualPrice} />
           </td>
         </>
       )}
@@ -382,6 +441,7 @@ function SectionTable({
   onAddRow,
   onDeleteRow,
   onPatchItem,
+  onSetManualPrice,
   onReorderItems,
   onRenameSection,
   onDeleteTable,
@@ -622,6 +682,7 @@ function SectionTable({
               onAddRow={onAddRow}
               onDeleteRow={onDeleteRow}
               onPatchItem={onPatchItem}
+              onSetManualPrice={onSetManualPrice}
               onResolved={onResolved}
               setRowMenu={setRowMenu}
             />
