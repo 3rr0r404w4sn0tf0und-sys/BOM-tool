@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconTrash } from "./Icons.jsx";
 
@@ -180,7 +181,14 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
     }
   }
 
-  return (
+  // Rendered via a portal straight to document.body -- see the matching
+  // comment in ApiModal.jsx. .bom-content-shell's permanent
+  // `backdrop-filter: blur(1px)` makes it a containing block for every
+  // position:fixed descendant, which was silently breaking this popover's
+  // anchoring; portaling out of the app root sidesteps that (and any
+  // other ancestor that ever gains a transform/filter/contain property)
+  // for good.
+  return createPortal(
     <div
       style={{
         position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
@@ -333,6 +341,7 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
           </p>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

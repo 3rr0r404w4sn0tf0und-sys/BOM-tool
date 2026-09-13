@@ -1,4 +1,5 @@
 import React, { useState, useRef, useLayoutEffect, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
 
@@ -180,7 +181,16 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
     }
   }
 
-  return (
+  // Rendered via a portal straight to document.body. This entire app is
+  // wrapped in .bom-content-shell, which has its own permanent
+  // `backdrop-filter: blur(1px)` for the glass look -- and backdrop-filter
+  // (like transform/filter/contain) makes an element a containing block
+  // for position:fixed descendants. That silently broke this popover's
+  // anchoring regardless of anything going on with animations further
+  // down the tree. Portaling out of the app root sidesteps the whole
+  // category of "some ancestor somewhere has a containing-block property"
+  // bugs for good, rather than chasing them one at a time.
+  return createPortal(
     <div
       style={{
         position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
@@ -369,6 +379,7 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
