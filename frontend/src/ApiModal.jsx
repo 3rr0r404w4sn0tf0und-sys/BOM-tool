@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconRefresh } from "./Icons.jsx";
@@ -100,7 +100,6 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
   const [keyRevealed, setKeyRevealed] = useState(false);
 
   const popoverRef = useRef(null);
-  const [pos, setPos] = useState(null);
 
   const key = bom.public_api_key;
   const hasKey = !!key;
@@ -114,41 +113,6 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
     ? `<iframe src="${htmlLinksUrl}" style="width:100%;border:none;min-height:600px;" title="${bom.title.replace(/"/g, "&quot;")} BOM (links)"></iframe>`
     : "";
   const maskedKey = hasKey ? "•".repeat(Math.min(key.length, 40)) : "";
-
-  // Position the popover just under the API button, anchored to it exactly
-  // like the Share popover -- flips to stay on-screen near the right/bottom
-  // edges instead of overflowing. Previously this rendered as a full-screen
-  // centered modal unrelated to the button that opened it.
-  useLayoutEffect(() => {
-    function place() {
-      const anchor = anchorRef?.current;
-      const popover = popoverRef.current;
-      if (!anchor) return;
-      const a = anchor.getBoundingClientRect();
-      const width = popover?.offsetWidth || 560;
-      const height = popover?.offsetHeight || 480;
-      const margin = 10;
-      let left = a.left;
-      if (left + width + margin > window.innerWidth) left = Math.max(margin, window.innerWidth - width - margin);
-      let top = a.bottom + 8;
-      if (top + height + margin > window.innerHeight) top = Math.max(margin, a.top - height - 8);
-      setPos({ top, left });
-    }
-    place();
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    let ro;
-    if (popoverRef.current && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(place);
-      ro.observe(popoverRef.current);
-    }
-    return () => {
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-      ro?.disconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyRevealed, confirmingRegen, regenError]);
 
   useEffect(() => {
     function onKeyDown(e) { if (e.key === "Escape") onClose(); }
@@ -191,15 +155,20 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
   // wrapped in .bom-content-shell, which has its own permanent
   // `backdrop-filter: blur(1px)` for the glass look -- and backdrop-filter
   // (like transform/filter/contain) makes an element a containing block
-  // for position:fixed descendants. That silently broke this popover's
-  // anchoring regardless of anything going on with animations further
-  // down the tree. Portaling out of the app root sidesteps the whole
-  // category of "some ancestor somewhere has a containing-block property"
-  // bugs for good, rather than chasing them one at a time.
+  // for position:fixed descendants. Portaling out of the app root keeps
+  // this immune to that (and any other ancestor that ever gains a
+  // transform/filter/contain property), regardless of how it's positioned.
+  //
+  // Centered modal with a dimming scrim -- the outer wrapper here IS the
+  // scrim (background + pointerEvents: "auto" so a click on it closes the
+  // modal), not just an invisible click-catcher.
   return createPortal(
     <div
+      onClick={onClose}
       style={{
-        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
+        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "auto",
+        background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
       }}
     >
       {/* Dark, thin scrollbars for the horizontally-scrolling code/url rows
@@ -217,9 +186,7 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
         onClick={(e) => e.stopPropagation()}
         className="bom-api-modal-scroll"
         style={{
-          position: "fixed",
-          top: pos?.top ?? -9999, left: pos?.left ?? -9999,
-          visibility: pos ? "visible" : "hidden",
+          position: "relative",
           width: 560, maxWidth: "calc(100vw - 20px)", maxHeight: "80vh", overflowY: "auto",
           background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 28,
           border: `1px solid ${theme.border}`,

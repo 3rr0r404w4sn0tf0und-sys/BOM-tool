@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { API_URL, apiFetch } from "./api.js";
 import { IconCopy, IconCheck, IconTrash } from "./Icons.jsx";
@@ -26,10 +26,6 @@ function RoleSelect({ value, onChange, theme, disabled }) {
 // ever rendered when bom.role === "owner" -- the backend also enforces
 // this independently, so this modal being reachable isn't itself a trust
 // boundary.
-//
-// Rendered as a popover anchored to the Share button (via anchorRef)
-// rather than a centered, dimmed-overlay modal -- it's a quick, contextual
-// action, not something that needs to take over the whole screen.
 export default function ShareModal({ bom, theme, onClose, anchorRef }) {
   const [shares, setShares] = useState(null);
   const [publicAccess, setPublicAccess] = useState(bom.public_access || "private");
@@ -45,49 +41,8 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
   const [savingVisibility, setSavingVisibility] = useState(false);
 
   const popoverRef = useRef(null);
-  const [pos, setPos] = useState(null);
 
   const shareLink = `${window.location.origin}/sheet/${bom.id}`;
-
-  // Position the popover just under the Share button, flipping to stay
-  // on-screen near the right/bottom edges instead of overflowing.
-  //
-  // Re-runs on a ResizeObserver watching the popover itself, not just a
-  // hand-picked list of state deps -- any content change that alters the
-  // popover's box (an invite error appearing, "Anyone with the link"
-  // expanding, a new share row) re-triggers placement automatically,
-  // instead of silently going stale the moment some untracked state
-  // changes the rendered height/width after the initial position was set.
-  useLayoutEffect(() => {
-    function place() {
-      const anchor = anchorRef?.current;
-      const popover = popoverRef.current;
-      if (!anchor) return;
-      const a = anchor.getBoundingClientRect();
-      const width = popover?.offsetWidth || 380;
-      const height = popover?.offsetHeight || 420;
-      const margin = 10;
-      let left = a.left;
-      if (left + width + margin > window.innerWidth) left = Math.max(margin, window.innerWidth - width - margin);
-      let top = a.bottom + 8;
-      if (top + height + margin > window.innerHeight) top = Math.max(margin, a.top - height - 8);
-      setPos({ top, left });
-    }
-    place();
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    let ro;
-    if (popoverRef.current && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(place);
-      ro.observe(popoverRef.current);
-    }
-    return () => {
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-      ro?.disconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, shares, publicAccess]);
 
   useEffect(() => {
     function onKeyDown(e) { if (e.key === "Escape") onClose(); }
@@ -197,23 +152,27 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
   // Rendered via a portal straight to document.body -- see the matching
   // comment in ApiModal.jsx. .bom-content-shell's permanent
   // `backdrop-filter: blur(1px)` makes it a containing block for every
-  // position:fixed descendant, which was silently breaking this popover's
-  // anchoring; portaling out of the app root sidesteps that (and any
-  // other ancestor that ever gains a transform/filter/contain property)
-  // for good.
+  // position:fixed descendant, so portaling out of the app root keeps
+  // this immune to that (and any other ancestor that ever gains a
+  // transform/filter/contain property), regardless of how it's positioned.
+  //
+  // Centered modal with a dimming scrim -- the outer wrapper here IS the
+  // scrim (background + pointerEvents: "auto" so a click on it closes the
+  // modal), not just an invisible click-catcher.
   return createPortal(
     <div
+      onClick={onClose}
       style={{
-        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "none",
+        position: "fixed", inset: 0, zIndex: 1000, pointerEvents: "auto",
+        background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
       }}
     >
       <div
         ref={popoverRef}
         onClick={(e) => e.stopPropagation()}
         style={{
-          position: "fixed",
-          top: pos?.top ?? -9999, left: pos?.left ?? -9999,
-          visibility: pos ? "visible" : "hidden",
+          position: "relative",
           width: 380, maxWidth: "calc(100vw - 20px)", maxHeight: "80vh", overflowY: "auto",
           background: theme.cardBg, color: theme.text, borderRadius: 14, padding: 20,
           border: `1px solid ${theme.border}`,
