@@ -51,6 +51,13 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
 
   // Position the popover just under the Share button, flipping to stay
   // on-screen near the right/bottom edges instead of overflowing.
+  //
+  // Re-runs on a ResizeObserver watching the popover itself, not just a
+  // hand-picked list of state deps -- any content change that alters the
+  // popover's box (an invite error appearing, "Anyone with the link"
+  // expanding, a new share row) re-triggers placement automatically,
+  // instead of silently going stale the moment some untracked state
+  // changes the rendered height/width after the initial position was set.
   useLayoutEffect(() => {
     function place() {
       const anchor = anchorRef?.current;
@@ -69,9 +76,15 @@ export default function ShareModal({ bom, theme, onClose, anchorRef }) {
     place();
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
+    let ro;
+    if (popoverRef.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(place);
+      ro.observe(popoverRef.current);
+    }
     return () => {
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
+      ro?.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, shares, publicAccess]);

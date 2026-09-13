@@ -137,9 +137,15 @@ export default function ApiModal({ bom, theme, onClose, onKeyRegenerated, anchor
     place();
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
+    let ro;
+    if (popoverRef.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(place);
+      ro.observe(popoverRef.current);
+    }
     return () => {
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
+      ro?.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyRevealed, confirmingRegen, regenError]);
