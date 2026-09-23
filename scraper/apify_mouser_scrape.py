@@ -1,59 +1,120 @@
 """
-Apify-based Mouser price lookup, using the purpose-built
-"crawloop/mouser-product-scraper" Actor
-(https://console.apify.com/actors/PA69eu9d2uDx1daiw/input) -- talks to
-Mouser's own data layer instead of screen-scraping the rendered page,
-which sidesteps Mouser's Akamai bot protection (known to block
-automated rendered-page scraping even from real, Apify-hosted
-browsers).
+Apify-based Mouser price lookup.
 
-There is no shared/site-wide APIFY_TOKEN secret -- each user brings their
-own Apify token (Settings -> Apify API key), passed through per-request
-from the API. Without one set, this reports "Apify not configured" and
-the caller falls back to the generic Apify scrape, then plain HTTP.
+SWAPPED 2026-09 -- the old Actor ("crawloop/mouser-product-scraper",
+PA69eu9d2uDx1daiw) was removed from Apify entirely (404
+record-not-found on run). Replaced with a different Actor
+(https://console.apify.com/actors/EFFpERQryCf3Q7LwL) that talks to
+Mouser's mobile-app API instead of screen-scraping the rendered page,
+which sidesteps Mouser's Akamai bot protection the same way the old
+one claimed to.
+
+IMPORTANT SHAPE CHANGE vs the old Actor: this one is keyed by Mouser
+PART NUMBER (`partNumbers: [...]` input), not by product URL
+(`productUrls: [...]` like before), and its output items don't carry
+a URL back at all -- just `distributor_part_number` /
+`manufacturer_part_number`. Since every item in this app is stored
+as a Mouser product URL, not a bare part number, this file now:
+  1. derives a part number from each stored URL (`_derive_part_number`)
+  2. sends those part numbers to the Actor
+  3. matches results back to the *original url* by part number
+
+The public function signature (`try_apify_mouser_scrape_batch(urls,
+apify_token=None) -> {url: {...}}`) is UNCHANGED -- callers
+(actions_refresh_mouser_weekly.py, scrapeDispatcher.js) don't need
+any changes.
+
+There is no shared/site-wide APIFY_TOKEN secret -- each user brings
+their own Apify token (Settings -> Apify API key), passed through
+per-request from the API. Without one set, this reports "Apify not
+configured" and the caller falls back to the generic Apify scrape,
+then plain HTTP.
 
 You'll need:
 1. An Apify account (same one already used for the Amazon Actor).
-2. APIFY_MOUSER_ACTOR_ID set to "crawloop/mouser-product-scraper" (or
-   its Actor ID, PA69eu9d2uDx1daiw) as a GitHub Actions secret/variable
-   (shared config, not a per-user credential).
+2. APIFY_MOUSER_ACTOR_ID set to the new Actor's ID, EFFpERQryCf3Q7LwL,
+   as a GitHub Actions secret/variable (shared config, not a
+   per-user credential) -- this REPLACES the old crawloop value.
 
-Input schema confirmed from the Actor's real input UI:
+Input schema, from the Actor's own README:
   {
-    "baseUrl": "https://www.mouser.com",
-    "enrichListingProducts": false,
-    "inStockOnly": false,
-    "productUrls": ["https://www.mouser.com/ProductDetail/..."],
-    "proxyConfiguration": {"useApifyProxy": false}
+    "partNumbers": ["78-2KDFN39CA-M3/H", "NE555P"],
+    "maxItemsPerQuery": 100,
+    "inStockOnly": false
   }
-Only `productUrls` is actually needed for a single-item price lookup --
-`baseUrl`, `inStockOnly`, `enrichListingProducts`, and
-`proxyConfiguration` all have sane defaults for this use case, so they're
-left out here rather than sent redundantly.
+`searchQueries`/`categoryPaths` also exist on this Actor but aren't
+used here -- this is a targeted BOM part-number lookup, not a search.
 
-Output schema (the shape of each item in the returned dataset) isn't
-confirmed yet -- `_extract_price` below tries several likely field
-names/shapes and prints the raw item on failure so the real field name
-can be read off a live run and hard-coded in.
+Output schema, from the Actor's own README example:
+  {
+    "distributor_part_number": "78-2KDFN39CA-M3/H",
+    "manufacturer_part_number": "2KDFN39CA-M3/H",
+    "price_breaks": [{"quantity": 1, "price": "$1.37",
+                       "price_without_format": 1.37, "currency": "USD"}],
+    ...
+  }
+Price comes from `price_breaks[0]['price_without_format']` (the
+qty=1 / first tier). NOT confirmed live yet -- `_extract_price` below
+also tries a couple of fallback shapes and prints the raw item on
+failure so a real mismatch can be read off a live run and fixed.
 """
 
 import os
 import requests
+from urllib.parse import urlparse
 
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 APIFY_MOUSER_ACTOR_ID = os.environ.get(
-    "APIFY_MOUSER_ACTOR_ID", "crawloop/mouser-product-scraper"
+    "APIFY_MOUSER_ACTOR_ID", "EFFpERQryCf3Q7LwL"
 )
 
 
+def _derive_part_number(url: str):
+    """Pull the likely Mouser part number off a product URL, for
+    feeding to the partNumbers-based Actor. Handles both URL shapes
+    seen in the wild:
+      .../ProductDetail/175-SF45-B                (no locale, no mfr slug)
+      .../en/ProductDetail/LightWare-LiDAR/SF45-B  (locale + mfr slug)
+    Takes the LAST path segment after ProductDetail -- that's always
+    the actual part-number-ish code, regardless of how many segments
+    (locale, manufacturer slug) come before it.
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    parsed = urlparse(url.strip())
+    parts = [p for p in parsed.path.split("/") if p]
+    lower = [p.lower() for p in parts]
+    if "productdetail" not in lower:
+        return None
+    i = lower.index("productdetail")
+    tail = parts[i + 1:]
+    if not tail:
+        return None
+    return tail[-1]
+
+
 def _extract_price(item: dict):
-    """Try several likely field names/shapes -- single unit price, or
-    the first entry of a price-break/tier list, whichever the Actor
-    actually returns (unconfirmed until seen on a live run)."""
-    for key in ("unitPriceValue", "unitPrice", "price", "priceBreaks", "pricingTiers", "prices"):
+    """Primary shape: price_breaks[0].price_without_format (or
+    .price, parsed). Falls back to a couple of other likely shapes in
+    case the Actor's real output drifts from its README example."""
+    breaks = item.get("price_breaks")
+    if isinstance(breaks, list) and breaks:
+        first = breaks[0]
+        if isinstance(first, dict):
+            val = first.get("price_without_format")
+            if isinstance(val, (int, float)):
+                return float(val)
+            val = first.get("price")
+            if isinstance(val, str):
+                digits = "".join(c for c in val if c.isdigit() or c == ".")
+                if digits:
+                    try:
+                        return float(digits)
+                    except ValueError:
+                        pass
+
+    for key in ("unitPriceValue", "unitPrice", "price"):
         val = item.get(key)
-        if val is None:
-            continue
         if isinstance(val, (int, float)):
             return float(val)
         if isinstance(val, str):
@@ -63,66 +124,16 @@ def _extract_price(item: dict):
                     return float(digits)
                 except ValueError:
                     continue
-        if isinstance(val, dict):
-            # e.g. {"price": 449.00, "qty": 1} or {"value": 449.00}
-            for subkey in ("unitPriceValue", "price", "value", "unitPrice"):
-                if subkey in val:
-                    return _extract_price({subkey: val[subkey]})
-        if isinstance(val, list) and val:
-            # Price-break tiers -- take the qty=1 / first tier's price.
-            first = val[0]
-            if isinstance(first, dict):
-                for subkey in ("unitPriceValue", "price", "unitPrice", "value"):
-                    if subkey in first:
-                        return _extract_price({subkey: first[subkey]})
     return None
 
 
-def _extract_url(item: dict, fallback: str = None):
-    for key in ("url", "productUrl", "link", "sourceUrl", "productURL", "product_url"):
+def _extract_part_number(item: dict):
+    for key in ("distributor_part_number", "manufacturer_part_number"):
         val = item.get(key)
         if isinstance(val, str) and val:
             return val
-    return fallback
-
-
-def _normalize_url(url: str):
-    if not isinstance(url, str) or not url:
-        return ""
-    from urllib.parse import urlparse
-    parsed = urlparse(url.strip())
-    host = (parsed.hostname or "").lower()
-    path = parsed.path.rstrip("/") or "/"
-    return f"{host}{path}"
-
-
-def _mouser_product_key(url: str):
-    if not isinstance(url, str):
-        return None
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    parts = [p for p in parsed.path.split("/") if p]
-    if "productdetail" in [p.lower() for p in parts]:
-        i = next((i for i,p in enumerate(parts) if p.lower() == "productdetail"), -1)
-        if i >= 0 and i + 1 < len(parts):
-            return parts[i + 1].lower()
     return None
 
-
-def _match_input_url(returned_url: str, input_urls: list, used: set):
-    if returned_url:
-        if returned_url in input_urls and returned_url not in used:
-            return returned_url
-        norm = _normalize_url(returned_url)
-        for u in input_urls:
-            if u not in used and _normalize_url(u) == norm:
-                return u
-        key = _mouser_product_key(returned_url)
-        if key:
-            for u in input_urls:
-                if u not in used and _mouser_product_key(u) == key:
-                    return u
-    return None
 
 def try_apify_mouser_scrape(url: str, apify_token: str = None) -> dict:
     results = try_apify_mouser_scrape_batch([url], apify_token=apify_token)
@@ -130,15 +141,16 @@ def try_apify_mouser_scrape(url: str, apify_token: str = None) -> dict:
 
 
 def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
-    """Same lookup as try_apify_mouser_scrape, but sends every url to the
-    Actor in ONE run (it already accepts a productUrls list) instead of
-    one Actor run per url -- cuts out most of the per-item startup
-    overhead on a big batch refresh.
+    """Same lookup as try_apify_mouser_scrape, but sends every url to
+    the Actor in ONE run (as a batch of derived part numbers) instead
+    of one Actor run per url.
 
     apify_token, if passed, overrides the APIFY_TOKEN env var -- see
     apify_scrape.try_apify_scrape_batch for why.
 
-    Returns {url: {found, price, source}}, one entry per input url.
+    Returns {url: {found, price, source}}, one entry per input url --
+    same external shape as before the Actor swap, even though the
+    Actor itself is now keyed by part number internally.
     """
     if not urls:
         return {}
@@ -148,17 +160,38 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
         error = {"found": False, "error": "Apify not configured (missing APIFY_TOKEN)"}
         return {u: error for u in urls}
 
+    # Derive a part number per url; urls we can't derive anything from
+    # fail immediately without wasting an Actor call on them.
+    url_to_part = {}
+    undeliverable = []
+    for u in urls:
+        part = _derive_part_number(u)
+        if part:
+            url_to_part[u] = part
+        else:
+            undeliverable.append(u)
+
+    if not url_to_part:
+        error = {"found": False, "error": "Could not derive a Mouser part number from this url"}
+        return {u: error for u in urls}
+
+    part_numbers = list(url_to_part.values())
+    part_to_urls = {}
+    for u, p in url_to_part.items():
+        part_to_urls.setdefault(p.lower(), []).append(u)
+
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_MOUSER_ACTOR_ID.replace('/', '~')}"
         "/run-sync-get-dataset-items"
     )
 
     run_input = {
-        "productUrls": urls,
-        "proxyConfiguration": {"useApifyProxy": False},
+        "partNumbers": part_numbers,
+        "maxItemsPerQuery": 100,
+        "inStockOnly": False,
     }
 
-    timeout = min(120 + 15 * len(urls), 900)
+    timeout = min(120 + 15 * len(part_numbers), 900)
 
     try:
         resp = requests.post(endpoint, json=run_input, headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
@@ -180,35 +213,49 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
         return {u: error for u in urls}
 
     results = {}
-    used = set()
-    for i, item in enumerate(items):
-        returned_url = _extract_url(item)
-        matched_url = _match_input_url(returned_url, urls, used)
-        if not matched_url and not returned_url:
-            remaining = [u for u in urls if u not in used]
-            if len(remaining) == 1:
-                matched_url = remaining[0]
-            elif i < len(urls) and urls[i] not in used:
-                matched_url = urls[i]
-        if not matched_url:
-            print(f"DEBUG: could not match Mouser Apify result; returned_url={returned_url!r}, item={item}")
+    used_parts = set()
+    for item in items:
+        returned_part = _extract_part_number(item)
+        matched_urls = []
+        if returned_part:
+            key = returned_part.lower()
+            if key in part_to_urls:
+                matched_urls = part_to_urls[key]
+            else:
+                # Loose match: returned part number contains or is
+                # contained by a derived one (Mouser often prefixes
+                # its own catalog number, e.g. "175-SF45-B" vs "SF45-B").
+                for derived_key, us in part_to_urls.items():
+                    if derived_key in key or key in derived_key:
+                        matched_urls = us
+                        break
+        if not matched_urls:
+            print(f"DEBUG: could not match Mouser Apify result to a url; returned_part={returned_part!r}, item={item}")
             continue
-        used.add(matched_url)
+
         price = _extract_price(item)
-        if price is None:
-            keys = ", ".join(sorted(item.keys())) or "(empty item)"
-            print(f"DEBUG: Apify Mouser scrape found no known price field for {matched_url}, raw item: {item}")
-            results[matched_url] = {
-                "found": False,
-                "error": f"Apify Mouser result had no recognizable price field (item keys: {keys})",
-            }
-        else:
-            print(f"Mouser Apify: matched {matched_url} -> ${price}")
-            results[matched_url] = {"found": True, "price": price, "source": "apify_mouser"}
+        for u in matched_urls:
+            if u in used_parts:
+                continue
+            used_parts.add(u)
+            if price is None:
+                keys = ", ".join(sorted(item.keys())) or "(empty item)"
+                print(f"DEBUG: Apify Mouser scrape found no known price field for {u}, raw item: {item}")
+                results[u] = {
+                    "found": False,
+                    "error": f"Apify Mouser result had no recognizable price field (item keys: {keys})",
+                }
+            else:
+                print(f"Mouser Apify: matched {u} -> ${price}")
+                results[u] = {"found": True, "price": price, "source": "apify_mouser"}
+            break  # one result item maps to one url even if several urls share a part number
 
     for u in urls:
         if u not in results:
-            results[u] = {"found": False, "error": "Apify Mouser scraper returned no result for this url"}
+            if u in undeliverable:
+                results[u] = {"found": False, "error": "Could not derive a Mouser part number from this url"}
+            else:
+                results[u] = {"found": False, "error": "Apify Mouser scraper returned no result for this url"}
 
     return results
 
