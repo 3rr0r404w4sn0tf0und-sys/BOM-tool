@@ -1,8 +1,8 @@
-name: Amazon price refresh (biweekly)
+name: Price refresh - Amazon (per-user interval)
 
 on:
   schedule:
-    - cron: "0 0 1,15 * *"   # Midnight UTC on the 1st and 15th of each month (~every 2 weeks)
+    - cron: "*/30 * * * *"   # every 30 min -- the actual per-source, per-user cadence is now controlled from Settings (user_scrape_settings), this is just the finest granularity that allows
   workflow_dispatch: {}
 
 permissions:

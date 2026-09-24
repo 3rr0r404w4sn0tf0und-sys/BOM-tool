@@ -17,6 +17,7 @@ import { useBomPolling } from "./useBomPolling.js";
 import RefreshMenu from "./RefreshMenu.jsx";
 import FinishSignup from "./FinishSignup.jsx";
 import AccountSettings from "./AccountSettings.jsx";
+import ScrapeSettings from "./ScrapeSettings.jsx";
 import Landing from "./Landing.jsx";
 import { useInactivityLogout } from "./useInactivityLogout.js";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -53,6 +54,7 @@ export default function App() {
   const [resendStatus, setResendStatus] = useState(null); // null | "sending" | "sent" | "error"
   const [onboardingToken, setOnboardingToken] = useState(() => { try { return sessionStorage.getItem("bom-onboarding-token"); } catch { return null; } });
   const [accountSettings, setAccountSettings] = useState(false);
+  const [scrapeSettings, setScrapeSettings] = useState(false);
   const [emailChangeMessage, setEmailChangeMessage] = useState(null);
   // Public marketing page at "/". Logged-out visitors land here first;
   // Login/Sign Up (top right) take them to the existing /login /register
@@ -503,7 +505,11 @@ export default function App() {
         if (data.user) {
           setToken("session");
           setUser(data.user);
-          if (data.user.username) setAccountSettings(window.location.pathname === "/settings/account");
+          if (data.user.username) {
+            const path = window.location.pathname;
+            setAccountSettings(path === "/settings/account");
+            setScrapeSettings(path === "/settings/scrapes");
+          }
         } else {
           setToken(null);
           setUser(null);
@@ -600,6 +606,7 @@ export default function App() {
     try { sessionStorage.removeItem("bom-onboarding-token"); } catch {}
     setSession(null, userData);
     setAccountSettings(false);
+    setScrapeSettings(false);
     setVerifyStatus(null);
     setVerifyMessage(null);
     setJustRegisteredEmail(null);
@@ -608,8 +615,16 @@ export default function App() {
 
   function openAccountSettings() {
     setBom(null);
+    setScrapeSettings(false);
     setAccountSettings(true);
     window.history.pushState({}, "", "/settings/account");
+  }
+
+  function openScrapeSettings() {
+    setBom(null);
+    setAccountSettings(false);
+    setScrapeSettings(true);
+    window.history.pushState({}, "", "/settings/scrapes");
   }
 
   function loginWithGithub() {
@@ -1019,11 +1034,11 @@ export default function App() {
     if (authChecking) return;
     const path = !token
       ? (onboardingToken ? "/finish" : landing ? "/" : mode === "register" ? "/register" : "/login")
-      : accountSettings ? "/settings/account" : bom ? `/sheet/${bom.id}` : "/dashboard";
+      : accountSettings ? "/settings/account" : scrapeSettings ? "/settings/scrapes" : bom ? `/sheet/${bom.id}` : "/dashboard";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, landing]);
+  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, scrapeSettings, landing]);
 
   // Support the browser's back/forward buttons.
   useEffect(() => {
@@ -1037,8 +1052,10 @@ export default function App() {
         else setLanding(true);
         return;
       }
-      if (path === "/settings/account") { setAccountSettings(true); return; }
+      if (path === "/settings/account") { setAccountSettings(true); setScrapeSettings(false); return; }
+      if (path === "/settings/scrapes") { setScrapeSettings(true); setAccountSettings(false); return; }
       setAccountSettings(false);
+      setScrapeSettings(false);
       if (sheetMatch) {
         if (!bom || bom.id !== sheetMatch[1]) loadBom(sheetMatch[1]);
       } else if (bom) {
@@ -1296,6 +1313,10 @@ export default function App() {
     return <AccountSettings theme={theme} user={user} onLogout={logout} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/dashboard"); }} onUpdated={(u) => setUser(u)} />;
   }
 
+  if (scrapeSettings) {
+    return <ScrapeSettings theme={theme} onBack={() => { setScrapeSettings(false); window.history.pushState({}, "", "/dashboard"); }} />;
+  }
+
   return (
     <div style={pageShell} className="bom-app-shell">
       <div
@@ -1334,6 +1355,7 @@ export default function App() {
             hasApifyToken={!!user?.has_apify_token}
             onManageApifyKey={() => setShowApifyKeyModal(true)}
             onAccountSettings={openAccountSettings}
+            onScrapeSettings={openScrapeSettings}
           />
         </div>
 

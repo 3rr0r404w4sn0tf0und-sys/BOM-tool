@@ -497,6 +497,47 @@ authRouter.delete("/apify-key", requireCsrf, asyncHandler(async (req, res) => {
   res.json({ hasApifyToken: false });
 }));
 
+// Per-source scrape refresh interval, user-configurable (Settings page).
+// Every scheduled GitHub Actions refresh job now runs every 30 min and
+// filters against this per (user, source) -- see scraper/scrape_schedule.py.
+// Keep in sync with DEFAULT_INTERVAL_MINUTES there if either changes.
+const SCRAPE_SOURCES = ["generic", "amazon", "mouser", "etsy"];
+const SCRAPE_INTERVAL_MIN_MINUTES = 30;
+const SCRAPE_INTERVAL_MAX_MINUTES = 262800; // ~6 months (182 days)
+const DEFAULT_SCRAPE_INTERVALS = { generic: 1440, amazon: 20160, mouser: 10080, etsy: 10080 };
+
+authRouter.get("/scrape-schedule", asyncHandler(async (req, res) => {
+  const auth = await getSessionFromRequest(req);
+  if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
+  const result = await pool.query(
+    "SELECT source, interval_minutes FROM user_scrape_settings WHERE user_id = $1",
+    [auth.payload.userId]
+  );
+  const settings = { ...DEFAULT_SCRAPE_INTERVALS };
+  for (const row of result.rows) settings[row.source] = row.interval_minutes;
+  res.json({ settings, defaults: DEFAULT_SCRAPE_INTERVALS, min: SCRAPE_INTERVAL_MIN_MINUTES, max: SCRAPE_INTERVAL_MAX_MINUTES });
+}));
+
+authRouter.put("/scrape-schedule", requireCsrf, asyncHandler(async (req, res) => {
+  const { source, intervalMinutes } = req.body || {};
+  if (!SCRAPE_SOURCES.includes(source)) {
+    return res.status(400).json({ error: `source must be one of: ${SCRAPE_SOURCES.join(", ")}` });
+  }
+  const n = Number(intervalMinutes);
+  if (!Number.isInteger(n) || n < SCRAPE_INTERVAL_MIN_MINUTES || n > SCRAPE_INTERVAL_MAX_MINUTES) {
+    return res.status(400).json({
+      error: `intervalMinutes must be an integer between ${SCRAPE_INTERVAL_MIN_MINUTES} and ${SCRAPE_INTERVAL_MAX_MINUTES}`,
+    });
+  }
+  await pool.query(
+    `INSERT INTO user_scrape_settings (user_id, source, interval_minutes, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (user_id, source) DO UPDATE SET interval_minutes = $3, updated_at = now()`,
+    [req.userId, source, n]
+  );
+  res.json({ source, intervalMinutes: n });
+}));
+
 authRouter.get("/csrf", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Missing or invalid session" });

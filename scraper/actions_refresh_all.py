@@ -38,8 +38,7 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from scrape_logic import get_price
-
-SKIP_IF_CHECKED_WITHIN_DAYS = 3
+from scrape_schedule import due_join_and_filter
 
 
 def main():
@@ -48,21 +47,23 @@ def main():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    due_join, due_where = due_join_and_filter("generic")
     cur.execute(
         f"""SELECT items.id, items.url FROM items
            JOIN sections ON items.section_id = sections.id
            JOIN boms ON sections.bom_id = boms.id
+           {due_join}
            WHERE items.url IS NOT NULL AND items.url != ''
              AND items.url NOT ILIKE '%amazon.%'
              AND items.url NOT ILIKE '%mouser.%'
              AND items.url NOT ILIKE '%etsy.%'
              AND items.source IS DISTINCT FROM 'manual'
-             AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
+             AND {due_where}"""
     )
     rows = cur.fetchall()
     if rows:
         cur.execute("UPDATE items SET status = 'pending', scrape_job_id = %s WHERE id = ANY(%s::uuid[])", (job_id, [r["id"] for r in rows]))
-    print(f"Nightly refresh (other items): {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
+    print(f"Nightly refresh (other items): {len(rows)} items to check (per-user interval, see Settings)")
 
     if not rows:
         cur.close()

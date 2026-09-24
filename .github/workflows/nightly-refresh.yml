@@ -1,8 +1,8 @@
-name: Nightly price refresh
+name: Price refresh - other items (per-user interval)
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 12:00 AM UTC daily -- adjust for your timezone if needed
+    - cron: "*/30 * * * *"   # every 30 min -- the actual per-source, per-user cadence is now controlled from Settings (user_scrape_settings), this is just the finest granularity that allows
   workflow_dispatch: {}    # lets you trigger it manually from the Actions tab too
 
 permissions:

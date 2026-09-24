@@ -26,9 +26,7 @@ import psycopg2.extras
 import uuid
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
 from secret_crypto import decrypt_secret
-
-SKIP_IF_CHECKED_WITHIN_DAYS = 3
-
+from scrape_schedule import due_join_and_filter
 
 def main():
     job_id = str(uuid.uuid4())
@@ -36,16 +34,18 @@ def main():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    due_join, due_where = due_join_and_filter("mouser")
     cur.execute(
         f"""SELECT items.id, items.url, boms.user_id FROM items
             JOIN sections ON items.section_id = sections.id
             JOIN boms ON sections.bom_id = boms.id
+            {due_join}
             WHERE items.url IS NOT NULL AND items.url != '' AND items.url ILIKE '%mouser.%'
               AND items.source IS DISTINCT FROM 'manual'
-              AND (items.last_checked IS NULL OR items.last_checked < now() - interval '{SKIP_IF_CHECKED_WITHIN_DAYS} days')"""
+              AND {due_where}"""
     )
     rows = cur.fetchall()
-    print(f"Weekly Mouser refresh: {len(rows)} items to check (skipping anything checked in the last {SKIP_IF_CHECKED_WITHIN_DAYS} days)")
+    print(f"Weekly Mouser refresh: {len(rows)} items to check (per-user interval, see Settings)")
 
     if not rows:
         cur.close()

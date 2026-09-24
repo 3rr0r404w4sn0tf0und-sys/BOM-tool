@@ -88,7 +88,7 @@ def _normalize_url(url: str):
     return f"{host}{path}"
 
 
-def _match_input_url(returned_url: str, input_urls: list, used: set):
+def _match_input_url(returned_url: str, input_urls: list, used: set, item: dict = None):
     # 1) Exact/normalized URL match.
     if returned_url:
         if returned_url in input_urls and returned_url not in used:
@@ -103,6 +103,19 @@ def _match_input_url(returned_url: str, input_urls: list, used: set):
         if asin:
             for u in input_urls:
                 if u not in used and _amazon_asin(u) == asin:
+                    return u
+    # 3) The Actor sometimes resolves a request to a *different* ASIN
+    #    entirely (e.g. a sibling size/length variant of the requested
+    #    product) -- 'asin' and the returned url both reflect the
+    #    variant it landed on, not what we asked for. It still echoes
+    #    the ASIN we actually requested back in 'originalAsin', so match
+    #    on that as a last resort before giving up on this item.
+    if item:
+        original_asin = item.get("originalAsin")
+        if isinstance(original_asin, str) and original_asin:
+            original_asin = original_asin.upper()
+            for u in input_urls:
+                if u not in used and _amazon_asin(u) == original_asin:
                     return u
     return None
 
@@ -196,7 +209,7 @@ def try_apify_scrape_batch(urls: list, zip_code: str = None, country_code: str =
     used = set()
     for i, item in enumerate(items):
         returned_url = _extract_url(item)
-        matched_url = _match_input_url(returned_url, urls, used)
+        matched_url = _match_input_url(returned_url, urls, used, item=item)
         # If the Actor omitted a URL, a single-item run can safely use its
         # sole input; for multi-item runs, preserve input order as a last
         # resort because the Actor accepts one result per start URL.
