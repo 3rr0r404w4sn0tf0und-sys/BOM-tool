@@ -135,6 +135,25 @@ def _extract_part_number(item: dict):
     return None
 
 
+def _normalize_part(s: str):
+    """Strip everything but alphanumerics and lowercase, so 'SF45-B',
+    'SF45/B', 'SF45 B', and '175-SF45/B' all reduce to comparable
+    forms ('sf45b' / '175sf45b') regardless of which separator Mouser
+    or our own URL-derivation happened to use."""
+    if not isinstance(s, str):
+        return ""
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
+def _url_part_key(url):
+    """Same last-path-segment extraction as _derive_part_number, used
+    on the Actor's OWN returned product_detail_url so we can match
+    two urls against each other directly -- this sidesteps part-number
+    formatting differences entirely when the Actor gives us a url back."""
+    part = _derive_part_number(url)
+    return _normalize_part(part) if part else None
+
+
 def try_apify_mouser_scrape(url: str, apify_token: str = None) -> dict:
     results = try_apify_mouser_scrape_batch([url], apify_token=apify_token)
     return results.get(url, {"found": False, "error": "Apify Mouser scraper returned no results"})
@@ -176,9 +195,11 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
         return {u: error for u in urls}
 
     part_numbers = list(url_to_part.values())
+    # Normalized (separator-stripped) part -> input urls, for fuzzy
+    # matching against whatever separator style Mouser returns.
     part_to_urls = {}
     for u, p in url_to_part.items():
-        part_to_urls.setdefault(p.lower(), []).append(u)
+        part_to_urls.setdefault(_normalize_part(p), []).append(u)
 
     endpoint = (
         f"https://api.apify.com/v2/acts/{APIFY_MOUSER_ACTOR_ID.replace('/', '~')}"
@@ -215,22 +236,32 @@ def try_apify_mouser_scrape_batch(urls: list, apify_token: str = None) -> dict:
     results = {}
     used_parts = set()
     for item in items:
-        returned_part = _extract_part_number(item)
         matched_urls = []
-        if returned_part:
-            key = returned_part.lower()
+
+        # 1) Best match: the Actor's own product_detail_url, reduced
+        # the same way we reduced our input urls -- sidesteps every
+        # separator/prefix quirk since it's comparing like-for-like.
+        returned_url = item.get("product_detail_url")
+        url_key = _url_part_key(returned_url) if returned_url else None
+        if url_key and url_key in part_to_urls:
+            matched_urls = part_to_urls[url_key]
+
+        returned_part = _extract_part_number(item)
+        if not matched_urls and returned_part:
+            key = _normalize_part(returned_part)
             if key in part_to_urls:
                 matched_urls = part_to_urls[key]
             else:
                 # Loose match: returned part number contains or is
                 # contained by a derived one (Mouser often prefixes
-                # its own catalog number, e.g. "175-SF45-B" vs "SF45-B").
+                # its own catalog number, e.g. "175SF45B" vs "SF45B").
                 for derived_key, us in part_to_urls.items():
-                    if derived_key in key or key in derived_key:
+                    if derived_key and (derived_key in key or key in derived_key):
                         matched_urls = us
                         break
+
         if not matched_urls:
-            print(f"DEBUG: could not match Mouser Apify result to a url; returned_part={returned_part!r}, item={item}")
+            print(f"DEBUG: could not match Mouser Apify result to a url; returned_part={returned_part!r}, product_detail_url={returned_url!r}, item={item}")
             continue
 
         price = _extract_price(item)
