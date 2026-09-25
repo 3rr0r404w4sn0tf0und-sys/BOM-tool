@@ -510,16 +510,21 @@ authRouter.get("/scrape-schedule", asyncHandler(async (req, res) => {
   const auth = await getSessionFromRequest(req);
   if (!auth) return res.status(401).json({ error: "Invalid or expired session" });
   const result = await pool.query(
-    "SELECT source, interval_minutes FROM user_scrape_settings WHERE user_id = $1",
+    "SELECT source, interval_minutes, anchor_at FROM user_scrape_settings WHERE user_id = $1",
     [auth.payload.userId]
   );
-  const settings = { ...DEFAULT_SCRAPE_INTERVALS };
-  for (const row of result.rows) settings[row.source] = row.interval_minutes;
-  res.json({ settings, defaults: DEFAULT_SCRAPE_INTERVALS, min: SCRAPE_INTERVAL_MIN_MINUTES, max: SCRAPE_INTERVAL_MAX_MINUTES });
+  const settings = {};
+  const anchors = {};
+  for (const src of SCRAPE_SOURCES) { settings[src] = DEFAULT_SCRAPE_INTERVALS[src]; anchors[src] = null; }
+  for (const row of result.rows) {
+    settings[row.source] = row.interval_minutes;
+    anchors[row.source] = row.anchor_at;
+  }
+  res.json({ settings, anchors, defaults: DEFAULT_SCRAPE_INTERVALS, min: SCRAPE_INTERVAL_MIN_MINUTES, max: SCRAPE_INTERVAL_MAX_MINUTES });
 }));
 
 authRouter.put("/scrape-schedule", requireCsrf, asyncHandler(async (req, res) => {
-  const { source, intervalMinutes } = req.body || {};
+  const { source, intervalMinutes, anchorAt } = req.body || {};
   if (!SCRAPE_SOURCES.includes(source)) {
     return res.status(400).json({ error: `source must be one of: ${SCRAPE_SOURCES.join(", ")}` });
   }
@@ -529,13 +534,24 @@ authRouter.put("/scrape-schedule", requireCsrf, asyncHandler(async (req, res) =>
       error: `intervalMinutes must be an integer between ${SCRAPE_INTERVAL_MIN_MINUTES} and ${SCRAPE_INTERVAL_MAX_MINUTES}`,
     });
   }
+  // anchorAt: an ISO datetime string (the moment their schedule should
+  // be phase-aligned to), or null/omitted to clear it (falls back to a
+  // fixed default origin -- see DEFAULT_ANCHOR_SQL in scrape_schedule.py).
+  let anchor = null;
+  if (anchorAt !== undefined && anchorAt !== null && anchorAt !== "") {
+    const parsed = new Date(anchorAt);
+    if (Number.isNaN(parsed.getTime())) {
+      return res.status(400).json({ error: "anchorAt must be a valid date/time, or omitted" });
+    }
+    anchor = parsed.toISOString();
+  }
   await pool.query(
-    `INSERT INTO user_scrape_settings (user_id, source, interval_minutes, updated_at)
-     VALUES ($1, $2, $3, now())
-     ON CONFLICT (user_id, source) DO UPDATE SET interval_minutes = $3, updated_at = now()`,
-    [req.userId, source, n]
+    `INSERT INTO user_scrape_settings (user_id, source, interval_minutes, anchor_at, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (user_id, source) DO UPDATE SET interval_minutes = $3, anchor_at = $4, updated_at = now()`,
+    [req.userId, source, n, anchor]
   );
-  res.json({ source, intervalMinutes: n });
+  res.json({ source, intervalMinutes: n, anchorAt: anchor });
 }));
 
 authRouter.get("/csrf", asyncHandler(async (req, res) => {
