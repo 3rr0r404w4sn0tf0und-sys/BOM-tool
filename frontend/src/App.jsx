@@ -18,6 +18,8 @@ import RefreshMenu from "./RefreshMenu.jsx";
 import FinishSignup from "./FinishSignup.jsx";
 import AccountSettings from "./AccountSettings.jsx";
 import ScrapeSettings from "./ScrapeSettings.jsx";
+import TrackPage from "./TrackPage.jsx";
+import BomDebugPanel from "./BomDebugPanel.jsx";
 import Landing from "./Landing.jsx";
 import { useInactivityLogout } from "./useInactivityLogout.js";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -55,6 +57,7 @@ export default function App() {
   const [onboardingToken, setOnboardingToken] = useState(() => { try { return sessionStorage.getItem("bom-onboarding-token"); } catch { return null; } });
   const [accountSettings, setAccountSettings] = useState(false);
   const [scrapeSettings, setScrapeSettings] = useState(false);
+  const [trackPage, setTrackPage] = useState(false);
   const [emailChangeMessage, setEmailChangeMessage] = useState(null);
   // Public marketing page at "/". Logged-out visitors land here first;
   // Login/Sign Up (top right) take them to the existing /login /register
@@ -509,6 +512,7 @@ export default function App() {
             const path = window.location.pathname;
             setAccountSettings(path === "/settings/account");
             setScrapeSettings(path === "/settings/scrapes");
+            setTrackPage(path === "/track");
           }
         } else {
           setToken(null);
@@ -615,13 +619,23 @@ export default function App() {
 
   function openAccountSettings() {
     setBom(null);
+    setTrackPage(false);
     setScrapeSettings(false);
     setAccountSettings(true);
     window.history.pushState({}, "", "/settings/account");
   }
 
+  function openTrackPage() {
+    setBom(null);
+    setAccountSettings(false);
+    setScrapeSettings(false);
+    setTrackPage(true);
+    window.history.pushState({}, "", "/track");
+  }
+
   function openScrapeSettings() {
     setBom(null);
+    setTrackPage(false);
     setAccountSettings(false);
     setScrapeSettings(true);
     window.history.pushState({}, "", "/settings/scrapes");
@@ -1034,11 +1048,11 @@ export default function App() {
     if (authChecking) return;
     const path = !token
       ? (onboardingToken ? "/finish" : landing ? "/" : mode === "register" ? "/register" : "/login")
-      : accountSettings ? "/settings/account" : scrapeSettings ? "/settings/scrapes" : bom ? `/sheet/${bom.id}` : "/dashboard";
+      : accountSettings ? "/settings/account" : scrapeSettings ? "/settings/scrapes" : trackPage ? "/track" : bom ? `/sheet/${bom.id}` : "/dashboard";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, scrapeSettings, landing]);
+  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, scrapeSettings, trackPage, landing]);
 
   // Support the browser's back/forward buttons.
   useEffect(() => {
@@ -1052,10 +1066,12 @@ export default function App() {
         else setLanding(true);
         return;
       }
-      if (path === "/settings/account") { setAccountSettings(true); setScrapeSettings(false); return; }
-      if (path === "/settings/scrapes") { setScrapeSettings(true); setAccountSettings(false); return; }
+      if (path === "/settings/account") { setAccountSettings(true); setScrapeSettings(false); setTrackPage(false); return; }
+      if (path === "/settings/scrapes") { setScrapeSettings(true); setAccountSettings(false); setTrackPage(false); return; }
+      if (path === "/track") { setTrackPage(true); setAccountSettings(false); setScrapeSettings(false); return; }
       setAccountSettings(false);
       setScrapeSettings(false);
+      setTrackPage(false);
       if (sheetMatch) {
         if (!bom || bom.id !== sheetMatch[1]) loadBom(sheetMatch[1]);
       } else if (bom) {
@@ -1313,6 +1329,10 @@ export default function App() {
     return <AccountSettings theme={theme} user={user} onLogout={logout} onBack={() => { setAccountSettings(false); window.history.pushState({}, "", "/dashboard"); }} onUpdated={(u) => setUser(u)} />;
   }
 
+  if (trackPage) {
+    return <TrackPage theme={theme} onBack={() => { setTrackPage(false); window.history.pushState({}, "", "/dashboard"); }} />;
+  }
+
   if (scrapeSettings) {
     return <ScrapeSettings theme={theme} onBack={() => { setScrapeSettings(false); window.history.pushState({}, "", "/dashboard"); }} />;
   }
@@ -1356,6 +1376,7 @@ export default function App() {
             onManageApifyKey={() => setShowApifyKeyModal(true)}
             onAccountSettings={openAccountSettings}
             onScrapeSettings={openScrapeSettings}
+            onTrack={openTrackPage}
           />
         </div>
 
@@ -1803,6 +1824,8 @@ export default function App() {
                 />
               ))}
             </div>
+
+            {bom.doc_type !== "sheet" && <BomDebugPanel theme={theme} sections={bom.sections} />}
 
             {bom.doc_type !== "sheet" && (
             <div

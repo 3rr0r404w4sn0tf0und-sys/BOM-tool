@@ -38,6 +38,7 @@ import psycopg2
 import psycopg2.extras
 import uuid
 from scrape_logic import get_price
+from scrape_errors import error_text
 from scrape_schedule import due_join_and_filter
 
 
@@ -81,7 +82,8 @@ def main():
             if result.get("found"):
                 cur.execute(
                     """UPDATE items
-                       SET unit_price = %s, status = 'ok', source = %s, last_checked = now()
+                       SET unit_price = %s, status = 'ok', source = %s, last_checked = now(),
+                           last_error = NULL, scrape_job_id = NULL
                        WHERE id = %s AND scrape_job_id = %s""",
                     (result["price"], result.get("source"), item_id, job_id),
                 )
@@ -93,16 +95,16 @@ def main():
                 )
                 cur.execute(
                     """UPDATE items
-                       SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), scrape_job_id = NULL
+                       SET unit_price = NULL, status = %s, source = NULL, last_checked = now(), last_error = %s, scrape_job_id = NULL
                        WHERE id = %s AND scrape_job_id = %s""",
-                    (status, item_id, job_id),
+                    (status, error_text(result), item_id, job_id),
                 )
             refreshed += 1
         except Exception as e:
             print(f"Failed to refresh item {item_id}: {e}", file=sys.stderr)
             cur.execute(
-                "UPDATE items SET status = 'link_failed', last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
-                (item_id, job_id),
+                "UPDATE items SET status = 'link_failed', last_checked = now(), last_error = %s, scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
+                (f"Unhandled scrape error: {e}"[:500], item_id, job_id),
             )
             failed += 1
 

@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import ThemeToggle from "./ThemeToggle.jsx";
-import { IconGear, IconLogout, IconPlug, IconClock } from "./Icons.jsx";
+import { IconGear, IconLogout, IconPlug, IconClock, IconTable } from "./Icons.jsx";
 
-export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout, hasApifyToken, onManageApifyKey, onAccountSettings, onScrapeSettings }) {
+export default function SettingsMenu({ theme, themeName, onToggleTheme, isLoggedIn, onLogout, hasApifyToken, onManageApifyKey, onAccountSettings, onScrapeSettings, onTrack }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -141,6 +141,31 @@ export default function SettingsMenu({ theme, themeName, onToggleTheme, isLogged
               >
                 <IconClock size={15} color={theme.text} />
                 Scrape schedule
+              </button>
+            )}
+            {onTrack && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onTrack();
+                }}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  color: theme.text,
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <IconTable size={15} color={theme.text} />
+                Scrape tracker
               </button>
             )}
             <button

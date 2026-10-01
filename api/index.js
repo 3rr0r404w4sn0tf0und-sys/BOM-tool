@@ -8,6 +8,7 @@ import { authRouter } from "./routes/auth.js";
 import { bomsRouter } from "./routes/boms.js";
 import { publicRouter } from "./routes/public.js";
 import { internalRouter } from "./routes/internal.js";
+import { trackRouter } from "./routes/track.js";
 import { requireAllowedOrigin } from "./middleware/auth.js";
 import { auditMutations } from "./middleware/audit.js";
 
@@ -128,6 +129,7 @@ app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/boms", bomsRouter);
 app.use("/api/public", publicRouter); // BOM Clean / BOM Links, for Odoo etc.
 app.use("/api/internal", internalRouter); // GitHub Actions scrape callback
+app.use("/api/track", trackRouter); // scrape tracker (/track page): last run + failures per scrape method
 
 // Global error handler. Express 4 does NOT catch errors thrown/rejected
 // inside async route handlers on its own -- without this (and without

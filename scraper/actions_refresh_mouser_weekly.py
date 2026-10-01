@@ -27,6 +27,7 @@ import uuid
 from apify_mouser_scrape import try_apify_mouser_scrape_batch
 from secret_crypto import decrypt_secret
 from scrape_schedule import due_join_and_filter
+from scrape_errors import error_text
 
 def main():
     job_id = str(uuid.uuid4())
@@ -93,7 +94,7 @@ def main():
             cur.execute(
                 """UPDATE items
                    SET unit_price = %s, status = 'ok', source = %s, last_checked = now(),
-                       stale_price = false, scrape_job_id = NULL
+                       stale_price = false, last_error = NULL, scrape_job_id = NULL
                    WHERE id = %s AND scrape_job_id = %s""",
                 (result["price"], result.get("source"), item_id, job_id),
             )
@@ -101,8 +102,8 @@ def main():
         else:
             print(f"{item_id}: all methods failed ({result.get('error')}), keeping last known price")
             cur.execute(
-                "UPDATE items SET status = CASE WHEN unit_price IS NULL THEN 'price_not_found' ELSE 'ok' END, stale_price = true, last_checked = now(), scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
-                (item_id, job_id),
+                "UPDATE items SET status = CASE WHEN unit_price IS NULL THEN 'price_not_found' ELSE 'ok' END, stale_price = true, last_checked = now(), last_error = %s, scrape_job_id = NULL WHERE id = %s AND scrape_job_id = %s",
+                (error_text(result), item_id, job_id),
             )
             stale += 1
 
