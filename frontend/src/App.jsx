@@ -19,6 +19,7 @@ import FinishSignup from "./FinishSignup.jsx";
 import AccountSettings from "./AccountSettings.jsx";
 import ScrapeSettings from "./ScrapeSettings.jsx";
 import TrackPage from "./TrackPage.jsx";
+import SearchPage from "./SearchPage.jsx";
 import BomDebugPanel from "./BomDebugPanel.jsx";
 import Landing from "./Landing.jsx";
 import { useInactivityLogout } from "./useInactivityLogout.js";
@@ -58,6 +59,7 @@ export default function App() {
   const [accountSettings, setAccountSettings] = useState(false);
   const [scrapeSettings, setScrapeSettings] = useState(false);
   const [trackPage, setTrackPage] = useState(false);
+  const [searchPage, setSearchPage] = useState(false);
   const [emailChangeMessage, setEmailChangeMessage] = useState(null);
   // Public marketing page at "/". Logged-out visitors land here first;
   // Login/Sign Up (top right) take them to the existing /login /register
@@ -513,6 +515,7 @@ export default function App() {
             setAccountSettings(path === "/settings/account");
             setScrapeSettings(path === "/settings/scrapes");
             setTrackPage(path === "/track");
+            setSearchPage(path === "/search");
           }
         } else {
           setToken(null);
@@ -620,13 +623,24 @@ export default function App() {
   function openAccountSettings() {
     setBom(null);
     setTrackPage(false);
+    setSearchPage(false);
     setScrapeSettings(false);
     setAccountSettings(true);
     window.history.pushState({}, "", "/settings/account");
   }
 
+  function openSearchPage() {
+    setBom(null);
+    setAccountSettings(false);
+    setScrapeSettings(false);
+    setTrackPage(false);
+    setSearchPage(true);
+    window.history.pushState({}, "", "/search");
+  }
+
   function openTrackPage() {
     setBom(null);
+    setSearchPage(false);
     setAccountSettings(false);
     setScrapeSettings(false);
     setTrackPage(true);
@@ -636,6 +650,7 @@ export default function App() {
   function openScrapeSettings() {
     setBom(null);
     setTrackPage(false);
+    setSearchPage(false);
     setAccountSettings(false);
     setScrapeSettings(true);
     window.history.pushState({}, "", "/settings/scrapes");
@@ -1048,11 +1063,11 @@ export default function App() {
     if (authChecking) return;
     const path = !token
       ? (onboardingToken ? "/finish" : landing ? "/" : mode === "register" ? "/register" : "/login")
-      : accountSettings ? "/settings/account" : scrapeSettings ? "/settings/scrapes" : trackPage ? "/track" : bom ? `/sheet/${bom.id}` : "/dashboard";
+      : accountSettings ? "/settings/account" : scrapeSettings ? "/settings/scrapes" : trackPage ? "/track" : searchPage ? "/search" : bom ? `/sheet/${bom.id}` : "/dashboard";
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, scrapeSettings, trackPage, landing]);
+  }, [authChecking, token, mode, bom, onboardingToken, accountSettings, scrapeSettings, trackPage, searchPage, landing]);
 
   // Support the browser's back/forward buttons.
   useEffect(() => {
@@ -1066,12 +1081,14 @@ export default function App() {
         else setLanding(true);
         return;
       }
-      if (path === "/settings/account") { setAccountSettings(true); setScrapeSettings(false); setTrackPage(false); return; }
-      if (path === "/settings/scrapes") { setScrapeSettings(true); setAccountSettings(false); setTrackPage(false); return; }
-      if (path === "/track") { setTrackPage(true); setAccountSettings(false); setScrapeSettings(false); return; }
+      if (path === "/settings/account") { setAccountSettings(true); setScrapeSettings(false); setTrackPage(false); setSearchPage(false); return; }
+      if (path === "/settings/scrapes") { setScrapeSettings(true); setAccountSettings(false); setTrackPage(false); setSearchPage(false); return; }
+      if (path === "/track") { setTrackPage(true); setAccountSettings(false); setScrapeSettings(false); setSearchPage(false); return; }
+      if (path === "/search") { setSearchPage(true); setAccountSettings(false); setScrapeSettings(false); setTrackPage(false); return; }
       setAccountSettings(false);
       setScrapeSettings(false);
       setTrackPage(false);
+      setSearchPage(false);
       if (sheetMatch) {
         if (!bom || bom.id !== sheetMatch[1]) loadBom(sheetMatch[1]);
       } else if (bom) {
@@ -1333,6 +1350,16 @@ export default function App() {
     return <TrackPage theme={theme} onBack={() => { setTrackPage(false); window.history.pushState({}, "", "/dashboard"); }} />;
   }
 
+  if (searchPage) {
+    return (
+      <SearchPage
+        theme={theme}
+        onBack={() => { setSearchPage(false); window.history.pushState({}, "", "/dashboard"); }}
+        onOpenDoc={(id) => { setSearchPage(false); loadBom(id); }}
+      />
+    );
+  }
+
   if (scrapeSettings) {
     return <ScrapeSettings theme={theme} onBack={() => { setScrapeSettings(false); window.history.pushState({}, "", "/dashboard"); }} />;
   }
@@ -1377,6 +1404,7 @@ export default function App() {
             onAccountSettings={openAccountSettings}
             onScrapeSettings={openScrapeSettings}
             onTrack={openTrackPage}
+            onSearch={openSearchPage}
           />
         </div>
 
