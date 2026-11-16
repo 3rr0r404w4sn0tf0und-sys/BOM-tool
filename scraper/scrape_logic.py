@@ -95,10 +95,58 @@ def _clean_price(raw):
     return float(match.group()) if match else None
 
 
-def try_generic_scrape(url: str) -> dict:
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
+def _browser_headers(ua: str) -> dict:
+    # A bare User-Agent is a classic bot fingerprint; Cloudflare-style WAFs
+    # 403 it (especially from GitHub Actions' datacenter IPs). Send the
+    # full set of headers a real browser would.
+    return {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    }
+
+
+def _try_shopify_js(url: str):
+    """Shopify exposes /products/<handle>.js (JSON) which is often not
+    behind the same bot rules as the HTML page. Returns a result dict or
+    None if it doesn't work for this URL."""
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(url)
+    if "/products/" not in parsed.path:
+        return None
+    js_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}.js"
     try:
-        resp = safe_get(url, headers=headers, timeout=10)
+        resp = safe_get(js_url, headers={**_browser_headers(USER_AGENTS[0]), "Accept": "application/json"}, timeout=10)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception:
+        return None
+    qs = parse_qs(parsed.query)
+    wanted = (qs.get("variant") or qs.get("VariantsId") or [None])[0]
+    variants = data.get("variants") or []
+    chosen = next((v for v in variants if str(v.get("id")) == str(wanted)), None) if wanted else None
+    chosen = chosen or (variants[0] if variants else None)
+    price_cents = (chosen or {}).get("price") or data.get("price")
+    if isinstance(price_cents, (int, float)) and price_cents > 0:
+        return {"found": True, "price": round(price_cents / 100, 2), "source": "shopify_js"}
+    return None
+
+
+def try_generic_scrape(url: str) -> dict:
+    resp = None
+    try:
+        for ua in random.sample(USER_AGENTS, len(USER_AGENTS)):
+            resp = safe_get(url, headers=_browser_headers(ua), timeout=10)
+            if resp.status_code not in (403, 429):
+                break
     except SSRFBlocked as e:
         # Treat like any other unreachable link rather than raising --
         # callers already expect try_generic_scrape() to never crash,
@@ -107,6 +155,11 @@ def try_generic_scrape(url: str) -> dict:
         return {"found": False, "error": f"link_failed: blocked ({e})"}
     except requests.exceptions.RequestException as e:
         return {"found": False, "error": f"link_failed: {e}"}
+
+    if resp.status_code in (403, 429):
+        alt = _try_shopify_js(url)
+        if alt:
+            return alt
 
     if resp.status_code in (404, 410):
         return {"found": False, "error": "link_failed: page returned 404/410"}
