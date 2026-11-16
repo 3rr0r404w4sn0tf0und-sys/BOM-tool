@@ -141,6 +141,13 @@ def _try_shopify_js(url: str):
 
 
 def try_generic_scrape(url: str) -> dict:
+    # Shopify-style /products/ URLs: try the JSON endpoint first. It is
+    # free, faster than parsing HTML, and often not behind the bot rules
+    # that 403 the HTML page. Silently falls through for non-Shopify sites.
+    shopify = _try_shopify_js(url)
+    if shopify:
+        return shopify
+
     resp = None
     try:
         for ua in random.sample(USER_AGENTS, len(USER_AGENTS)):
@@ -215,4 +222,17 @@ def try_generic_scrape(url: str) -> dict:
 
 
 def get_price(url: str) -> dict:
-    return try_generic_scrape(url)
+    result = try_generic_scrape(url)
+    # Plain fetch blocked (GitHub Actions' datacenter IP) -> retry once
+    # through Apify's proxy. Only fires on 403/429, so normal items stay free.
+    err = str(result.get("error") or "")
+    if not result.get("found") and ("403" in err or "429" in err):
+        try:
+            from apify_cheerio_fallback import try_apify_cheerio_scrape
+            fb = try_apify_cheerio_scrape(url)
+            if fb.get("found"):
+                return fb
+            result = {"found": False, "error": f"{err} | fallback: {fb.get('error')}"}
+        except Exception as e:
+            result = {"found": False, "error": f"{err} | fallback crashed: {e}"}
+    return result
