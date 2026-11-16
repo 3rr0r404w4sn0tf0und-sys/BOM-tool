@@ -223,16 +223,30 @@ def try_generic_scrape(url: str) -> dict:
 
 def get_price(url: str) -> dict:
     result = try_generic_scrape(url)
-    # Plain fetch blocked (GitHub Actions' datacenter IP) -> retry once
-    # through Apify's proxy. Only fires on 403/429, so normal items stay free.
+    # Plain fetch blocked (GitHub Actions' datacenter IP) -> retry through
+    # Apify. Only fires on 403/429, so normal items stay free.
     err = str(result.get("error") or "")
     if not result.get("found") and ("403" in err or "429" in err):
+        notes = []
+        # 1) Shopify Actor first for /products/ URLs: purpose-built, reads
+        #    the store's own catalogue feed from Apify's network.
+        if "/products/" in url:
+            try:
+                from apify_shopify_scrape import try_apify_shopify_scrape
+                fb = try_apify_shopify_scrape(url)
+                if fb.get("found"):
+                    return fb
+                notes.append(f"shopify actor: {fb.get('error')}")
+            except Exception as e:
+                notes.append(f"shopify actor crashed: {e}")
+        # 2) Generic cheerio fallback (cheap, works for non-Shopify too).
         try:
             from apify_cheerio_fallback import try_apify_cheerio_scrape
             fb = try_apify_cheerio_scrape(url)
             if fb.get("found"):
                 return fb
-            result = {"found": False, "error": f"{err} | fallback: {fb.get('error')}"}
+            notes.append(f"cheerio: {fb.get('error')}")
         except Exception as e:
-            result = {"found": False, "error": f"{err} | fallback crashed: {e}"}
+            notes.append(f"cheerio crashed: {e}")
+        result = {"found": False, "error": f"{err} | " + " | ".join(notes)}
     return result
