@@ -13,7 +13,7 @@ Fine for small stores; for a big store set SHOPIFY_MAX_PRODUCTS to cap it
 
 Env vars (all optional):
   APIFY_SHOPIFY_ACTOR_ID   default "trovevault/shopify-products-scraper"
-  APIFY_SHOPIFY_PROXY      "none" (default) | "datacenter" | "residential"
+  APIFY_SHOPIFY_PROXY      "residential" (default) | "datacenter" | "none"
   SHOPIFY_MAX_PRODUCTS     default 0 (= whole catalogue)
 """
 
@@ -25,8 +25,8 @@ import requests
 ACTOR_ID = os.environ.get("APIFY_SHOPIFY_ACTOR_ID", "trovevault/shopify-products-scraper")
 
 
-def _proxy_config():
-    mode = os.environ.get("APIFY_SHOPIFY_PROXY", "none").lower()
+def _proxy_config(mode=None):
+    mode = (mode or os.environ.get("APIFY_SHOPIFY_PROXY", "none")).lower()
     if mode == "residential":
         return {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]}
     if mode == "datacenter":
@@ -59,20 +59,29 @@ def try_apify_shopify_scrape(url: str) -> dict:
         f"https://api.apify.com/v2/acts/{ACTOR_ID.replace('/', '~')}"
         "/run-sync-get-dataset-items"
     )
-    run_input = {
-        "domains": [f"{parsed.scheme}://{parsed.hostname}"],
-        "maxProducts": int(os.environ.get("SHOPIFY_MAX_PRODUCTS", "0")),
-        "includeInventoryDetails": False,
-        "proxyConfiguration": _proxy_config(),
-    }
+    # Residential proxy by default (no-proxy runs from Apify were blocked).
+    # Override with APIFY_SHOPIFY_PROXY = none | datacenter | residential.
+    modes = [os.environ.get("APIFY_SHOPIFY_PROXY") or "residential"]
 
-    try:
-        resp = requests.post(endpoint, json=run_input,
-                             headers={"Authorization": f"Bearer {token}"}, timeout=300)
-        resp.raise_for_status()
-        items = resp.json()
-    except Exception as e:
-        return {"found": False, "error": f"Apify Shopify request failed: {e}"}
+    items = []
+    for mode in modes:
+        run_input = {
+            "domains": [f"{parsed.scheme}://{parsed.hostname}"],
+            "maxProducts": int(os.environ.get("SHOPIFY_MAX_PRODUCTS", "0")),
+            "includeInventoryDetails": False,
+            "proxyConfiguration": _proxy_config(mode),
+        }
+        try:
+            resp = requests.post(endpoint, json=run_input,
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=300)
+            if not resp.ok:
+                return {"found": False, "error": f"Apify Shopify HTTP {resp.status_code}: {resp.text[:300]}"}
+            items = resp.json()
+        except Exception as e:
+            return {"found": False, "error": f"Apify Shopify request failed: {e}"}
+        if items:
+            break
+        print(f"Apify Shopify actor returned 0 products with proxy={mode}")
 
     product = None
     for it in items or []:

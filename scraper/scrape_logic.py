@@ -228,8 +228,8 @@ def get_price(url: str) -> dict:
     err = str(result.get("error") or "")
     if not result.get("found") and ("403" in err or "429" in err):
         notes = []
-        # 1) Shopify Actor first for /products/ URLs: purpose-built, reads
-        #    the store's own catalogue feed from Apify's network.
+        # Shopify Actor for /products/ URLs: reads the store's own
+        # catalogue feed from Apify's network.
         if "/products/" in url:
             try:
                 from apify_shopify_scrape import try_apify_shopify_scrape
@@ -239,14 +239,5 @@ def get_price(url: str) -> dict:
                 notes.append(f"shopify actor: {fb.get('error')}")
             except Exception as e:
                 notes.append(f"shopify actor crashed: {e}")
-        # 2) Generic cheerio fallback (cheap, works for non-Shopify too).
-        try:
-            from apify_cheerio_fallback import try_apify_cheerio_scrape
-            fb = try_apify_cheerio_scrape(url)
-            if fb.get("found"):
-                return fb
-            notes.append(f"cheerio: {fb.get('error')}")
-        except Exception as e:
-            notes.append(f"cheerio crashed: {e}")
         result = {"found": False, "error": f"{err} | " + " | ".join(notes)}
     return result
